@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.claude/projects/
+.claude/todos/
+/tmp/claude_secret_vault/
