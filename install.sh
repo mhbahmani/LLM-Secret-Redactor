@@ -95,6 +95,8 @@ fi
 python3 - <<PYEOF
 import json
 import os
+import shutil
+from datetime import datetime
 
 settings_path = "$SETTINGS_FILE"
 prefix = "$HOOK_PATH_PREFIX"
@@ -104,9 +106,16 @@ if os.path.exists(settings_path):
     try:
         with open(settings_path, "r", encoding="utf-8") as f:
             settings = json.load(f)
-    except Exception:
+        # Create timestamped backup of existing settings
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{settings_path}.backup_{ts}"
+        shutil.copy2(settings_path, backup_path)
+        print(f"Backed up existing settings to {backup_path}")
+    except Exception as e:
+        print(f"Warning: Could not parse existing settings.json: {e}")
         settings = {}
 
+# Ensure hooks root exists and preserve all existing top-level settings (env, permissions, etc.)
 hooks = settings.setdefault("hooks", {})
 
 hooks_def = {
@@ -116,16 +125,25 @@ hooks_def = {
     "PreToolUse": f"{prefix}/pre_tool_use.py"
 }
 
+hook_scripts = set(hooks_def.values())
+
 for event, cmd in hooks_def.items():
     event_list = hooks.setdefault(event, [])
-    # Check if hook already registered
-    already_present = False
+    
+    # Check if this specific hook is already registered
+    already_registered = False
     for group in event_list:
         for h in group.get("hooks", []):
-            if h.get("command") == cmd:
-                already_present = True
+            if h.get("command") == cmd or os.path.basename(str(h.get("command", ""))) == os.path.basename(cmd):
+                # Update existing command path in place without duplicating
+                h["command"] = cmd
+                already_registered = True
                 break
-    if not already_present:
+        if already_registered:
+            break
+
+    # If not registered, append without touching any existing user hooks
+    if not already_registered:
         event_list.append({
             "hooks": [
                 {
