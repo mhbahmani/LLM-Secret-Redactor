@@ -4,7 +4,7 @@ set -euo pipefail
 # Terminal interactive input even when piped via `curl ... | bash`
 exec 3<&0
 if [ ! -t 0 ]; then
-    if (exec 4</dev/tty) 2>/dev/null; then
+    if [ -r /dev/tty ] && (exec 4</dev/tty) 2>/dev/null; then
         exec 3</dev/tty
         exec 4<&-
     fi
@@ -32,12 +32,14 @@ def get_tty_fd():
     for fd_candidate in (3, 0):
         try:
             if os.isatty(fd_candidate):
+                termios.tcgetattr(fd_candidate)
                 return fd_candidate
         except Exception:
             pass
     try:
         fd_tty = os.open("/dev/tty", os.O_RDWR)
         if os.isatty(fd_tty):
+            termios.tcgetattr(fd_tty)
             return fd_tty
     except Exception:
         pass
@@ -49,7 +51,10 @@ if fd is None:
     sys.exit(0)
 
 old_settings = termios.tcgetattr(fd)
-tty_out = os.fdopen(os.dup(fd), 'w')
+try:
+    tty_out = os.fdopen(os.dup(fd), 'w')
+except Exception:
+    tty_out = sys.stderr
 selected = 0
 
 def render(first=False):
@@ -98,9 +103,15 @@ try:
             render()
 
 finally:
-    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    tty_out.write("\033[?25h\n")
-    tty_out.flush()
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    except Exception:
+        pass
+    try:
+        tty_out.write("\033[?25h\n")
+        tty_out.flush()
+    except Exception:
+        pass
 
 print(selected)
 PYEOF
