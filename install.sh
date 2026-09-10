@@ -3,11 +3,13 @@ set -euo pipefail
 
 # Terminal interactive input even when piped via `curl ... | bash`
 exec 3<&0
-if [ ! -t 0 ]; then
-    if [ -r /dev/tty ] && (exec 4</dev/tty) 2>/dev/null; then
-        exec 3</dev/tty
-        exec 4<&-
-    fi
+IS_TTY=0
+if [ -t 0 ]; then
+    IS_TTY=1
+elif [ -r /dev/tty ] && (exec 4</dev/tty) 2>/dev/null; then
+    exec 3</dev/tty
+    exec 4<&-
+    IS_TTY=1
 fi
 
 FILES=("vault.py" "user_prompt_submit.py" "post_tool_use.py" "message_display.py" "pre_tool_use.py")
@@ -18,6 +20,12 @@ select_menu_interactive() {
     local prompt_title="$1"
     shift
     local raw_items=("$@")
+
+    # If not running with an interactive TTY, return default immediately
+    if [ "$IS_TTY" -eq 0 ]; then
+        echo "0"
+        return
+    fi
 
     python3 - "${prompt_title}" "${raw_items[@]}" <<'PYEOF'
 import sys, os, tty, termios
@@ -31,8 +39,13 @@ for arg in sys.argv[2:]:
 def get_tty_fd():
     for fd_candidate in (3, 0):
         try:
+            # Must be valid descriptor
+            os.fstat(fd_candidate)
             if os.isatty(fd_candidate):
                 termios.tcgetattr(fd_candidate)
+                # Test write capability
+                test_dup = os.dup(fd_candidate)
+                os.close(test_dup)
                 return fd_candidate
         except Exception:
             pass
@@ -40,6 +53,8 @@ def get_tty_fd():
         fd_tty = os.open("/dev/tty", os.O_RDWR)
         if os.isatty(fd_tty):
             termios.tcgetattr(fd_tty)
+            test_dup = os.dup(fd_tty)
+            os.close(test_dup)
             return fd_tty
     except Exception:
         pass
@@ -121,6 +136,11 @@ prompt_read() {
     local prompt_msg="$1"
     local var_name="$2"
     local default_val="${3:-}"
+
+    if [ "$IS_TTY" -eq 0 ]; then
+        eval "$var_name=\"\$default_val\""
+        return
+    fi
 
     if [ -n "$default_val" ]; then
         printf "%s [%s]: " "$prompt_msg" "$default_val" >&2
