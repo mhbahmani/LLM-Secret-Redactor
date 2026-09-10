@@ -20,20 +20,45 @@ Run interactive installer via curl:
 curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master/install.sh | bash
 ```
 
-The installer interactively asks:
-1. Scope selection:
-   - **Local (`1`)**: Project-level (`.claude/`) — applies only to the current repository.
-   - **Global (`2`)**: User-level (`~/.claude/`) — applies across all Claude Code sessions on your system.
-2. Custom destination path:
-   - Shows default directory (`$PWD/.claude` or `~/.claude`).
+The installer is **fully idempotent** (running it multiple times updates files safely without duplicating hook entries) and interactively guides you through:
+1. **Action selection**: `Install` or `Uninstall`.
+2. **Scope selection**:
+   - **Local**: Project-level (`.claude/`) — applies only to the current repository.
+   - **Global**: User-level (`~/.claude/`) — applies across all Claude Code sessions on your system.
+3. **Custom destination path**:
+   - Displays default target directory (`$PWD/.claude` or `~/.claude`).
    - Press **Enter** to accept default, or type a custom path.
 
-Or run locally:
+Or run directly from repo:
 
 ```bash
 git clone https://github.com/mhbahmani/llm-secret-redactor.git
 ./llm-secret-redactor/install.sh
 ```
+
+Flags can also be passed directly to bypass the action prompt:
+- `./install.sh --install`
+- `./install.sh --uninstall`
+
+## Uninstallation
+
+To cleanly remove redactor hooks and files without affecting any of your custom settings or other hooks:
+
+Via curl:
+```bash
+curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master/install.sh | bash -s -- --uninstall
+```
+
+Or run the script and select `Uninstall`:
+```bash
+./install.sh --uninstall
+```
+
+What uninstallation does:
+- Removes only the 5 redactor script files (`vault.py`, `user_prompt_submit.py`, `post_tool_use.py`, `message_display.py`, `pre_tool_use.py`).
+- Creates a timestamped backup of `settings.json`.
+- Removes only redactor hook definitions from `settings.json` while keeping your other settings, tools, env vars, and user-defined hooks completely intact.
+- Removes the `hooks/` directory only if it is empty.
 
 ## Testing
 

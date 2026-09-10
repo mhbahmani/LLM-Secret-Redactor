@@ -10,15 +10,23 @@ if [ ! -t 0 ]; then
     fi
 fi
 
-# Use python to do reliable TTY arrow-key selection
-select_scope_interactive() {
-    python3 - <<'PYEOF'
+FILES=("vault.py" "user_prompt_submit.py" "post_tool_use.py" "message_display.py" "pre_tool_use.py")
+REPO_RAW_URL="${REPO_RAW_URL:-https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master}"
+
+# Interactive arrow-key selection menu using Python
+select_menu_interactive() {
+    local prompt_title="$1"
+    shift
+    local raw_items=("$@")
+
+    python3 - "${prompt_title}" "${raw_items[@]}" <<'PYEOF'
 import sys, os, tty, termios
 
-options = [
-    ("Local", "Current project (.claude): applies only to this directory"),
-    ("Global", "User-wide (~/.claude): applies to all Claude Code sessions")
-]
+title = sys.argv[1]
+items = []
+for arg in sys.argv[2:]:
+    parts = arg.split("|", 1)
+    items.append((parts[0], parts[1] if len(parts) > 1 else ""))
 
 def get_tty_fd():
     for fd_candidate in (3, 0):
@@ -36,33 +44,34 @@ def get_tty_fd():
     return None
 
 fd = get_tty_fd()
-# If no tty available, fallback to default 0 (Local)
 if fd is None:
     print(0)
     sys.exit(0)
 
 old_settings = termios.tcgetattr(fd)
 tty_out = os.fdopen(os.dup(fd), 'w')
-
 selected = 0
 
 def render(first=False):
     if not first:
-        # Move up 2 lines and to column 1
-        tty_out.write(f"\033[{len(options)}A\r")
-    for i, (name, desc) in enumerate(options):
-        # Clear line
+        tty_out.write(f"\033[{len(items)}A\r")
+    for i, (name, desc) in enumerate(items):
         tty_out.write("\033[2K\r")
         if i == selected:
-            tty_out.write(f"  \033[1;32m❯ {name:<7}\033[0m - {desc}\n")
+            if desc:
+                tty_out.write(f"  \033[1;32m❯ {name:<10}\033[0m - {desc}\n")
+            else:
+                tty_out.write(f"  \033[1;32m❯ {name}\033[0m\n")
         else:
-            tty_out.write(f"    {name:<7} - {desc}\n")
+            if desc:
+                tty_out.write(f"    {name:<10} - {desc}\n")
+            else:
+                tty_out.write(f"    {name}\n")
     tty_out.flush()
 
 try:
-    # Hide cursor
     tty_out.write("\033[?25l")
-    tty_out.write("Select installation scope (use ↑/↓ arrow keys, Enter to confirm):\n")
+    tty_out.write(f"{title} (use ↑/↓ arrow keys, Enter to confirm):\n")
     tty_out.flush()
     render(first=True)
 
@@ -76,16 +85,16 @@ try:
         elif ch == b'\x1b':
             seq = os.read(fd, 2)
             if seq == b'[A': # Up
-                selected = (selected - 1) % len(options)
+                selected = (selected - 1) % len(items)
                 render()
             elif seq == b'[B': # Down
-                selected = (selected + 1) % len(options)
+                selected = (selected + 1) % len(items)
                 render()
         elif ch in (b'k', b'K'):
-            selected = (selected - 1) % len(options)
+            selected = (selected - 1) % len(items)
             render()
         elif ch in (b'j', b'J'):
-            selected = (selected + 1) % len(options)
+            selected = (selected + 1) % len(items)
             render()
 
 finally:
@@ -93,7 +102,6 @@ finally:
     tty_out.write("\033[?25h\n")
     tty_out.flush()
 
-# Output selection index to stdout for bash
 print(selected)
 PYEOF
 }
@@ -123,9 +131,31 @@ echo "    LLM Secret Redactor for Claude Code   "
 echo "=========================================="
 echo ""
 
-SELECTED_INDEX=$(select_scope_interactive)
+# Determine action: install or uninstall
+ACTION="install"
+if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+    ACTION="uninstall"
+elif [ "${1:-}" = "--install" ] || [ "${1:-}" = "install" ]; then
+    ACTION="install"
+else
+    ACTION_MENU=(
+        "Install|Install or update LLM secret redactor hooks"
+        "Uninstall|Cleanly remove redactor hooks and files"
+    )
+    ACTION_INDEX=$(select_menu_interactive "Select action" "${ACTION_MENU[@]}")
+    if [ "$ACTION_INDEX" -eq 1 ]; then
+        ACTION="uninstall"
+    fi
+fi
 
-case "$SELECTED_INDEX" in
+# Determine scope
+SCOPE_MENU=(
+    "Local|Current project (.claude): applies only to this directory"
+    "Global|User-wide (~/.claude): applies to all Claude Code sessions"
+)
+SCOPE_INDEX=$(select_menu_interactive "Select scope" "${SCOPE_MENU[@]}")
+
+case "$SCOPE_INDEX" in
     1)
         DEFAULT_BASE_DIR="$HOME/.claude"
         SCOPE_NAME="Global"
@@ -137,35 +167,121 @@ case "$SELECTED_INDEX" in
 esac
 
 echo ""
-echo "Selected scope: $SCOPE_NAME"
-echo "Configuration and hooks will be installed inside:"
-echo "  Directory: $DEFAULT_BASE_DIR"
-echo "  Hooks:     $DEFAULT_BASE_DIR/hooks"
-echo "  Settings:  $DEFAULT_BASE_DIR/settings.json"
+echo "Selected action: ${ACTION^^}"
+echo "Selected scope:  $SCOPE_NAME"
+echo "Target path:     $DEFAULT_BASE_DIR"
 echo ""
 
 prompt_read "Enter destination directory (press Enter for default)" CHOSEN_DIR "$DEFAULT_BASE_DIR"
 
 # Expand tilde if user typed ~/...
 CHOSEN_DIR="${CHOSEN_DIR/#\~/$HOME}"
-mkdir -p "$CHOSEN_DIR/hooks"
-
 HOOKS_DIR="$CHOSEN_DIR/hooks"
 SETTINGS_FILE="$CHOSEN_DIR/settings.json"
-REPO_RAW_URL="${REPO_RAW_URL:-https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master}"
-FILES=("vault.py" "user_prompt_submit.py" "post_tool_use.py" "message_display.py" "pre_tool_use.py")
 
+# ==============================================================================
+# UNINSTALL LOGIC
+# ==============================================================================
+if [ "$ACTION" = "uninstall" ]; then
+    echo ""
+    echo "Uninstalling LLM Secret Redactor from $CHOSEN_DIR..."
+
+    # 1. Clean settings.json if exists
+    if [ -f "$SETTINGS_FILE" ]; then
+        python3 - <<PYEOF
+import json
+import os
+import shutil
+from datetime import datetime
+
+settings_path = "$SETTINGS_FILE"
+file_names = {'vault.py', 'user_prompt_submit.py', 'post_tool_use.py', 'message_display.py', 'pre_tool_use.py'}
+
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        settings = json.load(f)
+except Exception:
+    settings = {}
+
+hooks = settings.get("hooks", {})
+modified = False
+
+for event, event_list in list(hooks.items()):
+    new_event_list = []
+    for group in event_list:
+        remaining_hooks = []
+        for h in group.get("hooks", []):
+            cmd = str(h.get("command", ""))
+            basename = os.path.basename(cmd)
+            if basename in file_names or "claude_secret_vault" in cmd:
+                modified = True
+            else:
+                remaining_hooks.append(h)
+        if remaining_hooks:
+            group["hooks"] = remaining_hooks
+            new_event_list.append(group)
+        else:
+            modified = True
+    if new_event_list:
+        hooks[event] = new_event_list
+    else:
+        del hooks[event]
+        modified = True
+
+if modified:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{settings_path}.backup_{ts}"
+    shutil.copy2(settings_path, backup_path)
+    print(f"Backed up settings before uninstallation to {backup_path}")
+
+    # Remove hooks key if empty
+    if not hooks and "hooks" in settings:
+        del settings["hooks"]
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    print(f"Cleaned redactor hooks from {settings_path}")
+else:
+    print("No redactor hooks found in settings.json")
+PYEOF
+    fi
+
+    # 2. Remove only redactor hook files
+    for file in "${FILES[@]}"; do
+        if [ -f "$HOOKS_DIR/$file" ]; then
+            rm -f "$HOOKS_DIR/$file"
+            echo "Removed $HOOKS_DIR/$file"
+        fi
+    done
+
+    # Remove hooks dir only if empty
+    if [ -d "$HOOKS_DIR" ] && [ -z "$(ls -A "$HOOKS_DIR")" ]; then
+        rmdir "$HOOKS_DIR" 2>/dev/null || true
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "✓ Uninstallation complete!"
+    echo "=========================================="
+    exit 0
+fi
+
+# ==============================================================================
+# INSTALL LOGIC (IDEMPOTENT)
+# ==============================================================================
+mkdir -p "$HOOKS_DIR"
 echo ""
 echo "Installing hook scripts into $HOOKS_DIR..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
 
 for file in "${FILES[@]}"; do
+    TARGET_PATH="$HOOKS_DIR/$file"
     if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$file" ]; then
-        cp "$SCRIPT_DIR/$file" "$HOOKS_DIR/$file"
+        cp "$SCRIPT_DIR/$file" "$TARGET_PATH"
     else
-        curl -fsSL "$REPO_RAW_URL/$file" -o "$HOOKS_DIR/$file"
+        curl -fsSL "$REPO_RAW_URL/$file" -o "$TARGET_PATH"
     fi
-    chmod +x "$HOOKS_DIR/$file"
+    chmod +x "$TARGET_PATH"
 done
 
 # In local mode, use ${CLAUDE_PROJECT_DIR}/.claude/hooks/
@@ -190,10 +306,6 @@ if os.path.exists(settings_path):
     try:
         with open(settings_path, "r", encoding="utf-8") as f:
             settings = json.load(f)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{settings_path}.backup_{ts}"
-        shutil.copy2(settings_path, backup_path)
-        print(f"Backed up existing settings to {backup_path}")
     except Exception as e:
         print(f"Warning: Could not parse existing settings.json: {e}")
         settings = {}
@@ -207,14 +319,24 @@ hooks_def = {
     "PreToolUse": f"{prefix}/pre_tool_use.py"
 }
 
+modified = False
+
 for event, cmd in hooks_def.items():
     event_list = hooks.setdefault(event, [])
+    target_basename = os.path.basename(cmd)
     
     already_registered = False
     for group in event_list:
         for h in group.get("hooks", []):
-            if h.get("command") == cmd or os.path.basename(str(h.get("command", ""))) == os.path.basename(cmd):
-                h["command"] = cmd
+            cur_cmd = h.get("command", "")
+            if cur_cmd == cmd:
+                already_registered = True
+                break
+            elif os.path.basename(str(cur_cmd)) == target_basename:
+                # Update existing path idempotently if changed
+                if cur_cmd != cmd:
+                    h["command"] = cmd
+                    modified = True
                 already_registered = True
                 break
         if already_registered:
@@ -229,9 +351,20 @@ for event, cmd in hooks_def.items():
                 }
             ]
         })
+        modified = True
 
-with open(settings_path, "w", encoding="utf-8") as f:
-    json.dump(settings, f, indent=2)
+if modified or not os.path.exists(settings_path):
+    if os.path.exists(settings_path):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{settings_path}.backup_{ts}"
+        shutil.copy2(settings_path, backup_path)
+        print(f"Backed up existing settings to {backup_path}")
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    print("Settings configuration updated.")
+else:
+    print("Configuration is already up to date (no changes needed).")
 
 PYEOF
 
