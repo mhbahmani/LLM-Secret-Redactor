@@ -1,12 +1,16 @@
 import json
 import subprocess
 import os
+import sys
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(REPO_ROOT, "src", "secret_redactor")
 SESSION = "test-session-123"
 
-def run_hook(script: str, input_data: dict) -> dict:
+def run_hook(script_name: str, input_data: dict) -> dict:
+    script_path = os.path.join(SRC_DIR, script_name)
     proc = subprocess.run(
-        [f"./{script}"],
+        [sys.executable, script_path],
         input=json.dumps(input_data),
         text=True,
         capture_output=True

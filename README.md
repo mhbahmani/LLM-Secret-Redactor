@@ -62,8 +62,8 @@ What uninstallation does:
 
 ## Testing
 
-Run integration tests:
+Run unit and integration tests:
 
 ```bash
-python3 test_hooks.py
+python3 -m unittest discover tests
 ```

@@ -1,7 +1,5 @@
 # Claude
-.claude/projects/
-.claude/todos/
-.claude/hooks/
+.claude/
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python

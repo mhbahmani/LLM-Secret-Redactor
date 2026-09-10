@@ -283,10 +283,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo
 
 for file in "${FILES[@]}"; do
     TARGET_PATH="$HOOKS_DIR/$file"
-    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$file" ]; then
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/src/secret_redactor/$file" ]; then
+        cp "$SCRIPT_DIR/src/secret_redactor/$file" "$TARGET_PATH"
+    elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$file" ]; then
         cp "$SCRIPT_DIR/$file" "$TARGET_PATH"
     else
-        curl -fsSL "$REPO_RAW_URL/$file" -o "$TARGET_PATH"
+        curl -fsSL "$REPO_RAW_URL/src/secret_redactor/$file" -o "$TARGET_PATH" || curl -fsSL "$REPO_RAW_URL/$file" -o "$TARGET_PATH"
     fi
     chmod +x "$TARGET_PATH"
 done
