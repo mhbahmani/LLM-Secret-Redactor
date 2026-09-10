@@ -14,17 +14,25 @@ Prevents sensitive credentials (API keys, passwords, database URIs, bearer token
 
 ## Installation
 
-Run this one-liner inside your project root:
+Run interactive installer via curl:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master/install.sh | bash
 ```
 
-Or clone and install locally:
+The installer interactively asks:
+1. Scope selection:
+   - **Local (`1`)**: Project-level (`.claude/`) — applies only to the current repository.
+   - **Global (`2`)**: User-level (`~/.claude/`) — applies across all Claude Code sessions on your system.
+2. Custom destination path:
+   - Shows default directory (`$PWD/.claude` or `~/.claude`).
+   - Press **Enter** to accept default, or type a custom path.
+
+Or run locally:
 
 ```bash
 git clone https://github.com/mhbahmani/llm-secret-redactor.git
-./llm-secret-redactor/install.sh .
+./llm-secret-redactor/install.sh
 ```
 
 ## Testing
