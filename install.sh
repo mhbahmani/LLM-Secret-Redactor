@@ -176,7 +176,8 @@ prompt_read "Enter destination directory (press Enter for default)" CHOSEN_DIR "
 
 # Expand tilde if user typed ~/...
 CHOSEN_DIR="${CHOSEN_DIR/#\~/$HOME}"
-HOOKS_DIR="$CHOSEN_DIR/hooks"
+APP_NAME="secret-redactor"
+HOOKS_DIR="$CHOSEN_DIR/hooks/$APP_NAME"
 SETTINGS_FILE="$CHOSEN_DIR/settings.json"
 
 # ==============================================================================
@@ -195,6 +196,7 @@ import shutil
 from datetime import datetime
 
 settings_path = "$SETTINGS_FILE"
+app_name = "$APP_NAME"
 file_names = {'vault.py', 'user_prompt_submit.py', 'post_tool_use.py', 'message_display.py', 'pre_tool_use.py'}
 
 try:
@@ -213,7 +215,13 @@ for event, event_list in list(hooks.items()):
         for h in group.get("hooks", []):
             cmd = str(h.get("command", ""))
             basename = os.path.basename(cmd)
-            if basename in file_names or "claude_secret_vault" in cmd:
+            # Identify hooks either by dedicated folder or script basenames
+            is_redactor = (
+                f"/hooks/{app_name}/" in cmd
+                or basename in file_names
+                or "claude_secret_vault" in cmd
+            )
+            if is_redactor:
                 modified = True
             else:
                 remaining_hooks.append(h)
@@ -246,17 +254,16 @@ else:
 PYEOF
     fi
 
-    # 2. Remove only redactor hook files
-    for file in "${FILES[@]}"; do
-        if [ -f "$HOOKS_DIR/$file" ]; then
-            rm -f "$HOOKS_DIR/$file"
-            echo "Removed $HOOKS_DIR/$file"
-        fi
-    done
+    # 2. Remove dedicated hooks directory
+    if [ -d "$HOOKS_DIR" ]; then
+        rm -rf "$HOOKS_DIR"
+        echo "Removed dedicated redactor directory: $HOOKS_DIR"
+    fi
 
-    # Remove hooks dir only if empty
-    if [ -d "$HOOKS_DIR" ] && [ -z "$(ls -A "$HOOKS_DIR")" ]; then
-        rmdir "$HOOKS_DIR" 2>/dev/null || true
+    # Remove parent hooks/ dir only if empty
+    PARENT_HOOKS_DIR="$CHOSEN_DIR/hooks"
+    if [ -d "$PARENT_HOOKS_DIR" ] && [ -z "$(ls -A "$PARENT_HOOKS_DIR")" ]; then
+        rmdir "$PARENT_HOOKS_DIR" 2>/dev/null || true
     fi
 
     echo ""
@@ -271,7 +278,7 @@ fi
 # ==============================================================================
 mkdir -p "$HOOKS_DIR"
 echo ""
-echo "Installing hook scripts into $HOOKS_DIR..."
+echo "Installing hook scripts into dedicated directory $HOOKS_DIR..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
 
 for file in "${FILES[@]}"; do
@@ -284,10 +291,10 @@ for file in "${FILES[@]}"; do
     chmod +x "$TARGET_PATH"
 done
 
-# In local mode, use ${CLAUDE_PROJECT_DIR}/.claude/hooks/
+# In local mode, use ${CLAUDE_PROJECT_DIR}/.claude/hooks/secret-redactor/
 # In global mode or custom path, absolute path ensures hooks run anywhere
 if [ "$CHOSEN_DIR" = "$PWD/.claude" ]; then
-    HOOK_PATH_PREFIX="\${CLAUDE_PROJECT_DIR}/.claude/hooks"
+    HOOK_PATH_PREFIX="\${CLAUDE_PROJECT_DIR}/.claude/hooks/$APP_NAME"
 else
     HOOK_PATH_PREFIX="$HOOKS_DIR"
 fi

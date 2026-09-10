@@ -55,10 +55,10 @@ Or run the script and select `Uninstall`:
 ```
 
 What uninstallation does:
-- Removes only the 5 redactor script files (`vault.py`, `user_prompt_submit.py`, `post_tool_use.py`, `message_display.py`, `pre_tool_use.py`).
+- Removes the isolated redactor directory (`hooks/secret-redactor/`), preventing file conflicts with any other hooks or tools.
 - Creates a timestamped backup of `settings.json`.
 - Removes only redactor hook definitions from `settings.json` while keeping your other settings, tools, env vars, and user-defined hooks completely intact.
-- Removes the `hooks/` directory only if it is empty.
+- Removes the parent `hooks/` directory only if it is empty.
 
 ## Testing
 
