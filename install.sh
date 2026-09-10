@@ -3,14 +3,100 @@ set -euo pipefail
 
 # Terminal interactive input even when piped via `curl ... | bash`
 exec 3<&0
-IS_TTY=0
-if [ -t 0 ]; then
-    IS_TTY=1
-elif (exec 4</dev/tty) 2>/dev/null; then
-    exec 3</dev/tty
-    exec 4<&-
-    IS_TTY=1
+if [ ! -t 0 ]; then
+    if (exec 4</dev/tty) 2>/dev/null; then
+        exec 3</dev/tty
+        exec 4<&-
+    fi
 fi
+
+# Use python to do reliable TTY arrow-key selection
+select_scope_interactive() {
+    python3 - <<'PYEOF'
+import sys, os, tty, termios
+
+options = [
+    ("Local", "Current project (.claude): applies only to this directory"),
+    ("Global", "User-wide (~/.claude): applies to all Claude Code sessions")
+]
+
+def get_tty_fd():
+    for fd_candidate in (3, 0):
+        try:
+            if os.isatty(fd_candidate):
+                return fd_candidate
+        except Exception:
+            pass
+    try:
+        fd_tty = os.open("/dev/tty", os.O_RDWR)
+        if os.isatty(fd_tty):
+            return fd_tty
+    except Exception:
+        pass
+    return None
+
+fd = get_tty_fd()
+# If no tty available, fallback to default 0 (Local)
+if fd is None:
+    print(0)
+    sys.exit(0)
+
+old_settings = termios.tcgetattr(fd)
+tty_out = os.fdopen(os.dup(fd), 'w')
+
+selected = 0
+
+def render(first=False):
+    if not first:
+        # Move up 2 lines and to column 1
+        tty_out.write(f"\033[{len(options)}A\r")
+    for i, (name, desc) in enumerate(options):
+        # Clear line
+        tty_out.write("\033[2K\r")
+        if i == selected:
+            tty_out.write(f"  \033[1;32m❯ {name:<7}\033[0m - {desc}\n")
+        else:
+            tty_out.write(f"    {name:<7} - {desc}\n")
+    tty_out.flush()
+
+try:
+    # Hide cursor
+    tty_out.write("\033[?25l")
+    tty_out.write("Select installation scope (use ↑/↓ arrow keys, Enter to confirm):\n")
+    tty_out.flush()
+    render(first=True)
+
+    tty.setraw(fd)
+    while True:
+        ch = os.read(fd, 1)
+        if ch in (b'\r', b'\n'):
+            break
+        elif ch == b'\x03': # Ctrl+C
+            raise KeyboardInterrupt
+        elif ch == b'\x1b':
+            seq = os.read(fd, 2)
+            if seq == b'[A': # Up
+                selected = (selected - 1) % len(options)
+                render()
+            elif seq == b'[B': # Down
+                selected = (selected + 1) % len(options)
+                render()
+        elif ch in (b'k', b'K'):
+            selected = (selected - 1) % len(options)
+            render()
+        elif ch in (b'j', b'J'):
+            selected = (selected + 1) % len(options)
+            render()
+
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    tty_out.write("\033[?25h\n")
+    tty_out.flush()
+
+# Output selection index to stdout for bash
+print(selected)
+PYEOF
+}
 
 prompt_read() {
     local prompt_msg="$1"
@@ -32,110 +118,12 @@ prompt_read() {
     fi
 }
 
-# Interactive arrow key selector
-select_option_menu() {
-    local prompt_title="$1"
-    shift
-    local options=("$@")
-    local selected=0
-    local count=${#options[@]}
-
-    # Fallback to simple prompt if non-interactive environment
-    if [ "$IS_TTY" -eq 0 ]; then
-        echo "$prompt_title" >&2
-        for i in "${!options[@]}"; do
-            echo "  $((i+1))) ${options[i]}" >&2
-        done
-        local num_choice
-        prompt_read "Choose option (1-$count)" num_choice "1"
-        local idx=$((num_choice - 1))
-        if [ "$idx" -lt 0 ] || [ "$idx" -ge "$count" ]; then
-            idx=0
-        fi
-        echo "$idx"
-        return
-    fi
-
-    # Save terminal settings and hide cursor
-    local old_stty
-    old_stty=$(stty -g 2>/dev/null || true)
-    stty -icanon -echo min 1 time 0 2>/dev/null || true
-    tput civis 2>/dev/null || printf "\033[?25l" >&2
-
-    cleanup_menu() {
-        tput cnorm 2>/dev/null || printf "\033[?25h" >&2
-        if [ -n "$old_stty" ]; then
-            stty "$old_stty" 2>/dev/null || true
-        fi
-    }
-    trap cleanup_menu EXIT INT TERM
-
-    echo "$prompt_title (use ↑/↓ arrow keys, Enter to select):" >&2
-    for ((i=0; i<count; i++)); do
-        echo "" >&2
-    done
-
-    render_menu() {
-        # Move up 'count' lines
-        for ((i=0; i<count; i++)); do
-            tput cuu1 2>/dev/null || printf "\033[1A" >&2
-        done
-        for ((i=0; i<count; i++)); do
-            # Clear line
-            tput el 2>/dev/null || printf "\033[2K" >&2
-            if [ "$i" -eq "$selected" ]; then
-                printf "  \033[1;32m❯ %s\033[0m\n" "${options[i]}" >&2
-            else
-                printf "    %s\n" "${options[i]}" >&2
-            fi
-        done
-    }
-
-    render_menu
-
-    while true; do
-        local key=""
-        key=$(dd bs=1 count=1 2>/dev/null <&3 || true)
-        if [ "$key" = $'\x1b' ]; then
-            local rest=""
-            rest=$(dd bs=1 count=2 2>/dev/null <&3 || true)
-            case "$rest" in
-                "[A") # Up
-                    selected=$(( (selected - 1 + count) % count ))
-                    render_menu
-                    ;;
-                "[B") # Down
-                    selected=$(( (selected + 1) % count ))
-                    render_menu
-                    ;;
-            esac
-        elif [ "$key" = "" ] || [ "$key" = $'\n' ] || [ "$key" = $'\r' ]; then
-            break
-        elif [ "$key" = "k" ] || [ "$key" = "K" ]; then
-            selected=$(( (selected - 1 + count) % count ))
-            render_menu
-        elif [ "$key" = "j" ] || [ "$key" = "J" ]; then
-            selected=$(( (selected + 1) % count ))
-            render_menu
-        fi
-    done
-
-    cleanup_menu
-    trap - EXIT INT TERM
-    echo "$selected"
-}
-
 echo "=========================================="
 echo "    LLM Secret Redactor for Claude Code   "
 echo "=========================================="
 echo ""
 
-MENU_OPTIONS=(
-    "Local  (current project: applies only to this directory)"
-    "Global (user-wide: ~/.claude, applies to all Claude Code sessions)"
-)
-
-SELECTED_INDEX=$(select_option_menu "Select installation scope" "${MENU_OPTIONS[@]}")
+SELECTED_INDEX=$(select_scope_interactive)
 
 case "$SELECTED_INDEX" in
     1)
