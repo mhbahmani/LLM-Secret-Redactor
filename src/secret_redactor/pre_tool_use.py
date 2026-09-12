@@ -2,11 +2,17 @@
 import sys
 import json
 import os
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vault import unmask_recursive
 
+
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--host", choices=("claude", "codex"), default="claude")
+    args = parser.parse_args()
+
     try:
         raw_input = sys.stdin.read()
         if not raw_input:
@@ -22,12 +28,14 @@ def main():
         unmasked_input, changed = unmask_recursive(tool_input, session_id)
 
         if changed:
-            output = {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "updatedInput": unmasked_input
-                }
+            hook_specific = {
+                "hookEventName": "PreToolUse",
+                "updatedInput": unmasked_input
             }
+            if args.host == "codex":
+                hook_specific["permissionDecision"] = "allow"
+                hook_specific["permissionDecisionReason"] = "llm-secret-redactor restored masked tokens for execution"
+            output = {"hookSpecificOutput": hook_specific}
             print(json.dumps(output))
         else:
             print(json.dumps({}))
