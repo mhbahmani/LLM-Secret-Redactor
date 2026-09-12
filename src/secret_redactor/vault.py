@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import glob
 import hashlib
 from typing import Tuple, Dict, Any
 
@@ -24,7 +25,7 @@ SECRET_PATTERNS = [
     (re.compile(r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}"), "JWT_TOKEN"),
 ]
 
-VAULT_DIR = "/tmp/claude_secret_vault"
+VAULT_DIR = os.environ.get("SECRET_REDACTOR_VAULT_DIR", "/tmp/claude_secret_vault")
 
 def get_vault_path(session_id: str) -> str:
     os.makedirs(VAULT_DIR, exist_ok=True)
@@ -121,11 +122,20 @@ def mask_text(text: str, session_id: str) -> Tuple[str, Dict[str, str]]:
 
     return text, vault
 
-def unmask_text(text: str, session_id: str) -> str:
+def unmask_text(text: str, session_id: str = None) -> str:
     if not isinstance(text, str) or not text:
         return text
 
-    vault = load_vault(session_id)
+    if session_id:
+        vault = load_vault(session_id)
+    else:
+        vault = {}
+        for path in sorted(glob.glob(os.path.join(VAULT_DIR, "vault_*.json"))):
+            try:
+                vault.update(json.loads(open(path, encoding="utf-8").read()))
+            except Exception:
+                continue
+
     if not vault:
         return text
 

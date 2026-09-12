@@ -2,12 +2,19 @@
 import sys
 import json
 import os
+import argparse
 
-# Ensure local directory is on python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vault import mask_recursive
 
+REDACTED_NOTICE = "[llm-secret-redactor] Raw secrets were masked before reaching the model. Redacted tool output:"
+
+
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--host", choices=("claude", "codex"), default="claude")
+    args = parser.parse_args()
+
     try:
         raw_input = sys.stdin.read()
         if not raw_input:
@@ -22,7 +29,26 @@ def main():
 
         masked_response, changed = mask_recursive(tool_response, session_id)
 
-        if changed:
+        if not changed:
+            # Nothing modified
+            print(json.dumps({}))
+            return
+
+        if args.host == "codex":
+            # Codex cannot rewrite tool output, but a PostToolUse block makes
+            # the host feed the model ONLY the "reason" instead of the raw
+            # result, so we return the masked output as that reason. The raw
+            # output remains visible in the local TUI for the human.
+            masked_text = (
+                masked_response
+                if isinstance(masked_response, str)
+                else json.dumps(masked_response, ensure_ascii=False)
+            )
+            print(json.dumps({
+                "decision": "block",
+                "reason": f"{REDACTED_NOTICE}\n{masked_text}",
+            }))
+        else:
             output = {
                 "hookSpecificOutput": {
                     "hookEventName": "PostToolUse",
@@ -30,12 +56,9 @@ def main():
                 }
             }
             print(json.dumps(output))
-        else:
-            # Nothing modified
-            print(json.dumps({}))
 
     except Exception:
-        # Never crash Claude Code on hook error
+        # Never crash the host on hook error
         sys.exit(0)
 
 if __name__ == "__main__":
