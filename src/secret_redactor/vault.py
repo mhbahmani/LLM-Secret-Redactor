@@ -169,6 +169,9 @@ def shutdown_broker():
             except subprocess.TimeoutExpired:
                 pass
         _BROKER_PROCESS = None
+        deadline = time.monotonic() + 2
+        while os.path.lexists(get_socket_path()) and time.monotonic() < deadline:
+            time.sleep(0.01)
         return response
     except (OSError, RuntimeError):
         return {"ok": True}

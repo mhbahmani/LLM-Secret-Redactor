@@ -167,11 +167,17 @@ async function brokerStats() {
 }
 
 async function shutdownBroker() {
+  let response = { ok: true };
   try {
-    return await sendRequest({ operation: "shutdown" });
+    response = await sendRequest({ operation: "shutdown" });
   } catch {
-    return { ok: true };
+    return response;
   }
+  const deadline = Date.now() + 2000;
+  while (fs.existsSync(getSocketPath()) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return response;
 }
 
 module.exports = {
