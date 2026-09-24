@@ -1,19 +1,35 @@
 #!/usr/bin/env python3
 import sys
 import os
+import re
 import json
 import shutil
 import urllib.request
 from datetime import datetime
 
 APP_NAME = "secret-redactor"
-FILES = [
-    "vault.py",
-    "user_prompt_submit.py",
-    "post_tool_use.py",
-    "message_display.py",
-    "pre_tool_use.py"
+
+CLAUDE_FILES = [
+    ("vault.py", "vault.py"),
+    ("patterns.json", "patterns.json"),
+    ("user_prompt_submit.py", "user_prompt_submit.py"),
+    ("post_tool_use.py", "post_tool_use.py"),
+    ("message_display.py", "message_display.py"),
+    ("pre_tool_use.py", "pre_tool_use.py")
 ]
+
+OPENCODE_FILES = [
+    ("vault.js", "vault.js"),
+    ("patterns.json", "patterns.json"),
+    ("opencode/transformer.js", "transformer.js"),
+    ("opencode/v1.js", "v1.js"),
+    ("opencode/v2.js", "v2.js"),
+    ("opencode/index.js", "index.js"),
+    ("opencode/plugin.js", "plugin.js"),
+    ("opencode/plugin.mjs", "plugin.mjs"),
+    ("opencode/package.json", "package.json")
+]
+
 REPO_RAW_URL = os.environ.get(
     "REPO_RAW_URL",
     "https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master"
@@ -23,7 +39,6 @@ def prompt_menu(title, options):
     """
     Arrow key selector when tty available, fallback to numbered input.
     """
-    # Check if we can interact with a real terminal
     tty_fd = None
     for candidate in ("/dev/tty", None):
         try:
@@ -40,7 +55,6 @@ def prompt_menu(title, options):
             continue
 
     if tty_fd is None:
-        # Non-interactive fallback
         print(f"{title}:")
         for i, (name, desc) in enumerate(options):
             print(f"  {i + 1}) {name} - {desc}")
@@ -53,7 +67,6 @@ def prompt_menu(title, options):
             pass
         return 0
 
-    # Interactive TTY with arrow keys
     import tty, termios
     old_settings = termios.tcgetattr(tty_fd)
     tty_out = os.fdopen(os.dup(tty_fd), 'w')
@@ -65,9 +78,9 @@ def prompt_menu(title, options):
         for i, (name, desc) in enumerate(options):
             tty_out.write("\033[2K\r")
             if i == selected:
-                tty_out.write(f"  \033[1;32m❯ {name:<10}\033[0m - {desc}\n")
+                tty_out.write(f"  \033[1;32m❯ {name:<12}\033[0m - {desc}\n")
             else:
-                tty_out.write(f"    {name:<10} - {desc}\n")
+                tty_out.write(f"    {name:<12} - {desc}\n")
         tty_out.flush()
 
     try:
@@ -111,7 +124,6 @@ def prompt_menu(title, options):
 
 def prompt_input(msg, default_val):
     try:
-        # Try reading from /dev/tty if stdin is piped
         if not sys.stdin.isatty():
             with open("/dev/tty", "r") as tty_in:
                 sys.stderr.write(f"{msg} [{default_val}]: ")
@@ -127,12 +139,12 @@ def prompt_input(msg, default_val):
     except Exception:
         return default_val
 
-def get_script_source(filename, local_repo_dir):
+def get_script_source(rel_path, local_repo_dir):
     # 1. Local repo check
     if local_repo_dir:
         candidate_paths = [
-            os.path.join(local_repo_dir, "src", "secret_redactor", filename),
-            os.path.join(local_repo_dir, filename)
+            os.path.join(local_repo_dir, "src", "secret_redactor", rel_path),
+            os.path.join(local_repo_dir, rel_path)
         ]
         for p in candidate_paths:
             if os.path.isfile(p):
@@ -141,8 +153,8 @@ def get_script_source(filename, local_repo_dir):
 
     # 2. Remote download
     urls = [
-        f"{REPO_RAW_URL}/src/secret_redactor/{filename}",
-        f"{REPO_RAW_URL}/{filename}"
+        f"{REPO_RAW_URL}/src/secret_redactor/{rel_path}",
+        f"{REPO_RAW_URL}/{rel_path}"
     ]
     for url in urls:
         try:
@@ -152,14 +164,17 @@ def get_script_source(filename, local_repo_dir):
                     return resp.read()
         except Exception:
             continue
-    raise RuntimeError(f"Could not fetch {filename} from local files or {REPO_RAW_URL}")
+    raise RuntimeError(f"Could not fetch {rel_path} from local files or {REPO_RAW_URL}")
 
-def do_uninstall(chosen_dir):
-    print(f"\nUninstalling LLM Secret Redactor from {chosen_dir}...")
+# --- Claude Code Operations ---
+
+def do_uninstall_claude(chosen_dir):
+    print(f"\nUninstalling LLM Secret Redactor (Claude Code) from {chosen_dir}...")
     settings_file = os.path.join(chosen_dir, "settings.json")
     hooks_dir = os.path.join(chosen_dir, "hooks", APP_NAME)
 
-    # 1. Clean settings.json
+    file_names = {dest for _, dest in CLAUDE_FILES}
+
     if os.path.isfile(settings_file):
         try:
             with open(settings_file, "r", encoding="utf-8") as f:
@@ -169,7 +184,6 @@ def do_uninstall(chosen_dir):
 
         hooks = settings.get("hooks", {})
         modified = False
-        file_names = set(FILES)
 
         for event, event_list in list(hooks.items()):
             new_event_list = []
@@ -209,34 +223,29 @@ def do_uninstall(chosen_dir):
                 json.dump(settings, f, indent=2)
             print(f"Cleaned redactor hooks from {settings_file}")
         else:
-            print("No redactor hooks found in settings.json")
+            print("No redactor hooks found in Claude Code settings.json")
 
-    # 2. Remove hooks directory
     if os.path.isdir(hooks_dir):
         shutil.rmtree(hooks_dir)
-        print(f"Removed dedicated directory: {hooks_dir}")
+        print(f"Removed Claude Code hooks directory: {hooks_dir}")
 
-    # Remove parent hooks/ if empty
     parent_hooks = os.path.join(chosen_dir, "hooks")
     if os.path.isdir(parent_hooks) and not os.listdir(parent_hooks):
         os.rmdir(parent_hooks)
 
-    print("\n==========================================")
-    print("✓ Uninstallation complete!")
-    print("==========================================")
-
-def do_install(chosen_dir, local_repo_dir):
+def do_install_claude(chosen_dir, local_repo_dir):
     hooks_dir = os.path.join(chosen_dir, "hooks", APP_NAME)
     settings_file = os.path.join(chosen_dir, "settings.json")
     os.makedirs(hooks_dir, exist_ok=True)
 
-    print(f"\nInstalling hook scripts into {hooks_dir}...")
-    for filename in FILES:
-        content = get_script_source(filename, local_repo_dir)
-        target_path = os.path.join(hooks_dir, filename)
+    print(f"\nInstalling Claude Code hooks into {hooks_dir}...")
+    for src_rel, dest_rel in CLAUDE_FILES:
+        content = get_script_source(src_rel, local_repo_dir)
+        target_path = os.path.join(hooks_dir, dest_rel)
         with open(target_path, "wb") as f:
             f.write(content)
-        os.chmod(target_path, 0o755)
+        if target_path.endswith(".py"):
+            os.chmod(target_path, 0o755)
 
     cwd = os.getcwd()
     if os.path.abspath(chosen_dir) == os.path.abspath(os.path.join(cwd, ".claude")):
@@ -292,67 +301,256 @@ def do_install(chosen_dir, local_repo_dir):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = f"{settings_file}.backup_{ts}"
             shutil.copy2(settings_file, backup_file)
-            print(f"Backed up existing settings to {backup_file}")
+            print(f"Backed up Claude Code settings to {backup_file}")
         with open(settings_file, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
-        print("Settings configuration updated.")
+        print("Claude Code configuration updated.")
     else:
-        print("Configuration is already up to date (no changes needed).")
+        print("Claude Code configuration is already up to date.")
 
-    print("\n==========================================")
-    print("✓ Successfully installed llm-secret-redactor!")
-    print(f"  Hooks:    {hooks_dir}")
-    print(f"  Settings: {settings_file}")
-    print("==========================================")
+    print(f"✓ Claude Code hooks installed in {hooks_dir}")
 
-def main():
-    print("==========================================")
-    print("    LLM Secret Redactor for Claude Code   ")
-    print("==========================================")
-    print("")
+# --- OpenCode Operations ---
 
-    # Determine caller directory for local files if invoked as script
-    caller_dir = None
-    if "__file__" in globals() and os.path.isfile(__file__):
-        caller_dir = os.path.dirname(os.path.abspath(__file__))
+def find_opencode_config(base_dir, is_global):
+    if is_global:
+        for candidate in ["opencode.jsonc", "opencode.json"]:
+            p = os.path.join(base_dir, candidate)
+            if os.path.isfile(p):
+                return p
+        return os.path.join(base_dir, "opencode.jsonc")
+    project_dir = os.path.dirname(base_dir) if os.path.basename(base_dir) == ".opencode" else base_dir
+    for candidate in ["opencode.jsonc", "opencode.json"]:
+        path = os.path.join(project_dir, candidate)
+        if os.path.isfile(path):
+            return path
+    return os.path.join(project_dir, "opencode.json")
 
-    # Determine action
+def remove_opencode_config(config_file, plugin_entries):
+    if not os.path.isfile(config_file):
+        return
+
+    with open(config_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    modified = False
+    for entry in plugin_entries:
+        quoted = rf'"{re.escape(entry)}"'
+        new_content, count = re.subn(rf'{quoted}\s*,', '', content, count=1)
+        if not count:
+            new_content, count = re.subn(rf',\s*{quoted}', '', content, count=1)
+        if not count:
+            new_content, count = re.subn(quoted, '', content, count=1)
+        if count:
+            content = new_content
+            modified = True
+
+    if modified:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = f"{config_file}.backup_{ts}"
+        shutil.copy2(config_file, backup_file)
+        print(f"Backed up OpenCode config to {backup_file}")
+        with open(config_file, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"Removed redactor plugin entry from {config_file}")
+
+def do_uninstall_opencode(chosen_dir, is_global):
+    print(f"\nUninstalling LLM Secret Redactor (OpenCode) from {chosen_dir}...")
+    plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
+    trampoline = os.path.join(chosen_dir, "plugins", f"{APP_NAME}.js")
+    config_file = find_opencode_config(chosen_dir, is_global)
+
+    remove_entries = [
+        f"./plugins/{APP_NAME}/plugin.js",
+        f"./.opencode/plugins/{APP_NAME}/plugin.js",
+        f"./plugins/{APP_NAME}.js",
+        f"./.opencode/plugins/{APP_NAME}.js",
+    ]
+    remove_opencode_config(config_file, remove_entries)
+
+    if os.path.isdir(plugins_dir):
+        shutil.rmtree(plugins_dir)
+        print(f"Removed OpenCode plugin directory: {plugins_dir}")
+
+    if os.path.isfile(trampoline):
+        os.remove(trampoline)
+        print(f"Removed OpenCode plugin trampoline: {trampoline}")
+
+    redactor_config = os.path.join(chosen_dir, "secret-redactor.json")
+    if os.path.isfile(redactor_config):
+        os.remove(redactor_config)
+        print(f"Removed {redactor_config}")
+
+    parent_plugins = os.path.join(chosen_dir, "plugins")
+    if os.path.isdir(parent_plugins) and not os.listdir(parent_plugins):
+        os.rmdir(parent_plugins)
+
+def do_install_opencode(chosen_dir, is_global, local_repo_dir, mask_ui=False):
+    plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
+    os.makedirs(plugins_dir, exist_ok=True)
+
+    print(f"\nInstalling OpenCode plugin into {plugins_dir}...")
+    for src_rel, dest_rel in OPENCODE_FILES:
+        content = get_script_source(src_rel, local_repo_dir)
+        target_path = os.path.join(plugins_dir, dest_rel)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, "wb") as f:
+            f.write(content)
+
+    trampoline = os.path.join(chosen_dir, "plugins", f"{APP_NAME}.js")
+    with open(trampoline, "w", encoding="utf-8") as f:
+        f.write(f'module.exports = require("./{APP_NAME}/plugin.js");\n')
+
+    # OpenCode auto-loads files in its global and project plugin directories.
+    # Registering the nested implementation in opencode.json as well would load
+    # the redactor twice, so the top-level trampoline is the only entry point.
+
+    redactor_config = os.path.join(chosen_dir, "secret-redactor.json")
+    with open(redactor_config, "w", encoding="utf-8") as f:
+        json.dump({"maskUi": mask_ui}, f, indent=2)
+    print(f"Wrote maskUi={mask_ui} to {redactor_config}")
+
+    print(f"✓ OpenCode plugin installed in {plugins_dir}")
+
+# --- Main Entry ---
+
+def parse_args():
+    action = None
     if "--uninstall" in sys.argv or "uninstall" in sys.argv:
         action = "uninstall"
     elif "--install" in sys.argv or "install" in sys.argv:
         action = "install"
+
+    scope = None
+    if "--global" in sys.argv:
+        scope = "global"
+    elif "--local" in sys.argv:
+        scope = "local"
+    for arg in sys.argv:
+        if arg.startswith("--scope="):
+            scope = arg.split("=", 1)[1].lower()
+
+    client = None
+    if "--all" in sys.argv:
+        client = "all"
+    elif "--claude" in sys.argv:
+        client = "claude"
+    elif "--opencode" in sys.argv:
+        client = "opencode"
+    for arg in sys.argv:
+        if arg.startswith("--client="):
+            client = arg.split("=", 1)[1].lower()
+
+    mask_ui = None
+    if "--mask-ui" in sys.argv:
+        mask_ui = True
+    elif "--no-mask-ui" in sys.argv:
+        mask_ui = False
+
+    return action, scope, client, mask_ui
+
+def main():
+    print("==========================================")
+    print("      LLM Secret Redactor Installer       ")
+    print("    Supports Claude Code and OpenCode     ")
+    print("==========================================")
+    print("")
+
+    caller_dir = None
+    if "__file__" in globals() and os.path.isfile(__file__):
+        caller_dir = os.path.dirname(os.path.abspath(__file__))
+
+    cli_action, cli_scope, cli_client, cli_mask_ui = parse_args()
+
+    # 1. Action
+    if cli_action:
+        action = cli_action
     else:
         action_options = [
-            ("Install", "Install or update LLM secret redactor hooks"),
-            ("Uninstall", "Cleanly remove redactor hooks and files")
+            ("Install", "Install or update LLM secret redactor"),
+            ("Uninstall", "Cleanly remove redactor integrations and files")
         ]
         action_idx = prompt_menu("Select action", action_options)
         action = "uninstall" if action_idx == 1 else "install"
 
-    # Determine scope
-    scope_options = [
-        ("Local", "Current project (.claude): applies only to this directory"),
-        ("Global", "User-wide (~/.claude): applies to all Claude Code sessions")
-    ]
-    scope_idx = prompt_menu("Select scope", scope_options)
-    if scope_idx == 1:
-        default_base_dir = os.path.expanduser("~/.claude")
-        scope_name = "Global"
+    # 2. Client Selection
+    if cli_client:
+        client = cli_client
     else:
-        default_base_dir = os.path.abspath(".claude")
-        scope_name = "Local"
+        client_options = [
+            ("Both", "Install/Update for both Claude Code and OpenCode (Recommended)"),
+            ("Claude Code", "Target Claude Code native hooks only"),
+            ("OpenCode", "Target OpenCode plugin only")
+        ]
+        client_idx = prompt_menu("Select target client", client_options)
+        if client_idx == 0:
+            client = "all"
+        elif client_idx == 1:
+            client = "claude"
+        else:
+            client = "opencode"
+
+    # 3. Scope Selection
+    if cli_scope:
+        scope = cli_scope
+    else:
+        scope_options = [
+            ("Local", "Current project: applies only to this directory/repository"),
+            ("Global", "User-wide: applies across all sessions on your system")
+        ]
+        scope_idx = prompt_menu("Select scope", scope_options)
+        scope = "global" if scope_idx == 1 else "local"
+
+    is_global = (scope == "global")
+
+    mask_ui = False
+    if client in ("opencode", "all"):
+        if cli_mask_ui is not None:
+            mask_ui = cli_mask_ui
+        elif action == "install":
+            mask_ui_options = [
+                ("No", "Show real secrets in UI; mask only what's sent to model (default)"),
+                ("Yes", "Mask secrets everywhere in UI, including user prompt and assistant output")
+            ]
+            mask_ui_idx = prompt_menu("Mask secrets in UI?", mask_ui_options)
+            mask_ui = mask_ui_idx == 1
 
     print(f"\nSelected action: {action.upper()}")
-    print(f"Selected scope:  {scope_name}")
-    print(f"Target path:     {default_base_dir}\n")
+    print(f"Selected client: {client.upper()}")
+    print(f"Selected scope:  {scope.capitalize()}")
+    if client in ("opencode", "all"):
+        print(f"Mask UI:         {mask_ui}")
 
-    chosen_dir = prompt_input("Enter destination directory (press Enter for default)", default_base_dir)
-    chosen_dir = os.path.abspath(os.path.expanduser(chosen_dir))
+    # Paths
+    if client in ("claude", "all"):
+        default_claude_dir = os.path.expanduser("~/.claude") if is_global else os.path.abspath(".claude")
+        chosen_claude_dir = prompt_input(
+            "Claude Code destination directory (press Enter for default)",
+            default_claude_dir
+        )
+        chosen_claude_dir = os.path.abspath(os.path.expanduser(chosen_claude_dir))
 
-    if action == "uninstall":
-        do_uninstall(chosen_dir)
-    else:
-        do_install(chosen_dir, caller_dir)
+        if action == "uninstall":
+            do_uninstall_claude(chosen_claude_dir)
+        else:
+            do_install_claude(chosen_claude_dir, caller_dir)
+
+    if client in ("opencode", "all"):
+        default_opencode_dir = os.path.expanduser("~/.config/opencode") if is_global else os.path.abspath(".opencode")
+        chosen_opencode_dir = prompt_input(
+            "OpenCode destination directory (press Enter for default)",
+            default_opencode_dir
+        )
+        chosen_opencode_dir = os.path.abspath(os.path.expanduser(chosen_opencode_dir))
+
+        if action == "uninstall":
+            do_uninstall_opencode(chosen_opencode_dir, is_global)
+        else:
+            do_install_opencode(chosen_opencode_dir, is_global, caller_dir, mask_ui)
+
+    print("\n==========================================")
+    print(f"✓ {action.capitalize()} completed successfully!")
+    print("==========================================")
 
 if __name__ == "__main__":
     try:
