@@ -1,0 +1,45 @@
+[
+  {
+    "name": "Anthropic key",
+    "pattern": "sk-ant-[a-zA-Z0-9_\\-]{20,}",
+    "kind": "TOKEN"
+  },
+  {
+    "name": "OpenAI key",
+    "pattern": "sk-[a-zA-Z0-9_\\-]{20,}",
+    "kind": "TOKEN"
+  },
+  {
+    "name": "GitHub Token",
+    "pattern": "gh[pousr]_[a-zA-Z0-9]{36,}",
+    "kind": "TOKEN"
+  },
+  {
+    "name": "AWS Access Key ID",
+    "pattern": "(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}",
+    "kind": "AWS_KEY"
+  },
+  {
+    "name": "Generic bearer token",
+    "pattern": "bearer\\s+([a-zA-Z0-9_\\-.]{20,})",
+    "flags": "i",
+    "kind": "BEARER_TOKEN"
+  },
+  {
+    "name": "URI with credentials",
+    "pattern": "([a-z0-9+.\\-]+://[^:\\s@/]+:)([^@\\s/]+)(@)",
+    "flags": "i",
+    "kind": "URI_PASS"
+  },
+  {
+    "name": "Key-value secrets",
+    "pattern": "([\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\"']?\\s*[:=]\\s*[\"']?)([^\\s\"',;}{]{6,})([\"']?)",
+    "flags": "i",
+    "kind": "KV_SECRET"
+  },
+  {
+    "name": "JWT token pattern",
+    "pattern": "eyJ[a-zA-Z0-9_\\-]{10,}\\.eyJ[a-zA-Z0-9_\\-]{10,}\\.[a-zA-Z0-9_\\-]{10,}",
+    "kind": "JWT_TOKEN"
+  }
+]

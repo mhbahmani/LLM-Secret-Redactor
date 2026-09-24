@@ -22,7 +22,7 @@ class TestVaultCore(unittest.TestCase):
         text = f"API_KEY={secret}"
         masked, _ = mask_text(text, self.session_id)
         self.assertNotIn(secret, masked)
-        self.assertIn("__MASKED_OPENAI_KEY_", masked)
+        self.assertIn("__MASKED_TOKEN_", masked)
 
         unmasked = unmask_text(masked, self.session_id)
         self.assertEqual(unmasked, text)
@@ -32,7 +32,7 @@ class TestVaultCore(unittest.TestCase):
         text = f"token: {secret}"
         masked, _ = mask_text(text, self.session_id)
         self.assertNotIn(secret, masked)
-        self.assertIn("__MASKED_GITHUB_TOKEN_", masked)
+        self.assertIn("__MASKED_TOKEN_", masked)
 
         unmasked = unmask_text(masked, self.session_id)
         self.assertEqual(unmasked, text)

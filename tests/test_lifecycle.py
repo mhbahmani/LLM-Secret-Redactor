@@ -65,7 +65,7 @@ def test_flow():
     print("✓ message_display: successfully restored real secrets for terminal display")
 
     # 4. PreToolUse unmasks token if Claude sends it back into a tool
-    gh_token = [t for t in tokens if "GITHUB_TOKEN" in t][0]
+    gh_token = [t for t in tokens if "TOKEN" in t][0]
     res = run_hook("pre_tool_use.py", {
         "session_id": SESSION,
         "hook_event_name": "PreToolUse",
