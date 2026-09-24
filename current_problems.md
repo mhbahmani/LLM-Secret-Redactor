@@ -1,25 +1,15 @@
-# Current Problems
+# Current limitations
 
-Status as of: 2026-09-15.
+Status as of: 2026-09-24.
 
-## 1. User's own prompt is masked in the UI
+## 1. OpenCode reveal uses a dialog
 
-When a secret is typed into the opencode input box, the plugin masks the user
-message at ingestion (`chat.message` hook). Consequence:
+OpenCode exposes terminal selection and local dialogs to TUI plugins, but does
+not expose a supported override for built-in transcript rendering. Revealed
+values therefore appear in a temporary dialog for 10 seconds. The stored
+transcript remains redacted.
 
-- The model sees the mask token (good).
-- But the message echoed back to the user in the terminal / UI also shows the
-  mask token, e.g.:
-  `DB_PASSWORD=__MASKED_SECRET_0B6FA859__`
-  instead of the actual secret the user typed.
-
-User preference: the user's own message on screen should show the real secret,
-not the mask. Only the model should see the masked form. The echo to the user
-does not appear to be restored by the display/restore hooks
-(`experimental.text.complete` only restores assistant output, not the user's
-own message echo).
-
-## 2. litellm does not pass `__MASKED_*__` through — it sends `REDACTED`
+## 2. LiteLLM may replace `__MASKED_*__` with `REDACTED`
 
 In the litellm provider logs, the user message arrives redacted at the wording
 level:
@@ -41,22 +31,21 @@ Expected/wanted on the wire instead:
   litellm performs a second redaction pass that swallows even the mask token,
   destroying the secret-kind information and the per-session unmask reference.
 
-## 4. Two masking layers fight each other
+## 3. Multiple masking layers can still interact
 
 There are (at least) two redaction layers acting on the same message:
 
-1. Our plugin (`chat.message` → `maskText`, `__MASKED_*__` tokens).
+1. This plugin (`chat.message` and dispatch hooks, `__MASKED_*__` tokens).
 2. The upstream provider (litellm) redacting on its own.
 
 They do not coordinate. Our token is designed to be reversible per-session via
-the vault; litellm's `REDACTED` is not. Net effect: the model sometimes sees
+the memory broker; litellm's `REDACTED` is not. Net effect: the model sometimes sees
 `REDACTED` (opaque) instead of a reversible mask token, and the user UI shows
 mask tokens instead of the original.
 
-## Open design questions
+## 4. Same-user compromise is out of scope
 
-- Should the plugin mask the user's own message at all, or only the copy that
-  goes to the model (keep the DB copy / UI echo unmasked)?
-- Should the mask token format be made opaque enough to survive the upstream
-  provider's redaction heuristics (e.g. not shaped like a secret at all)?
-- How should the mock + real provider interplay terminate the tool call loop?
+The socket directory and socket are private to the current OS user and mappings
+are never written to disk. A process already running as that user can
+still inspect process memory or attempt to communicate with local IPC, so this
+is not a defense against a fully compromised account.

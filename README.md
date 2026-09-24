@@ -1,13 +1,13 @@
 # llm-secret-redactor
 
-Zero-leak secret redactor for **Claude Code** and **OpenCode**.
+Memory-only secret redactor for **Claude Code** and **OpenCode**.
 
-Prevents sensitive credentials (API keys, passwords, database URIs, bearer tokens, JWTs) from reaching LLMs when read from files, logs, or command output, while seamlessly restoring them on your local terminal and before local tool execution.
+Prevents sensitive credentials (API keys, passwords, database URIs, bearer tokens, JWTs) from reaching LLMs when read from files, logs, or command output. Mappings live only in a per-user memory broker and are restored only for local tool execution or an explicit local reveal.
 
 ## Supported Clients
 
-- **Claude Code**: Uses native lifecycle hooks (`UserPromptSubmit`, `PostToolUse`, `PreToolUse`, `MessageDisplay`).
-- **OpenCode**: Uses native OpenCode plugin hooks (`experimental.chat.messages.transform`, `tool.execute.before`, `experimental.text.complete` in V1; `context`, `compaction`, `generate`, `title`, and `tool.execute.before` in V2).
+- **Claude Code**: Uses native lifecycle hooks (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PostToolUse`, `PreToolUse`, `MessageDisplay`).
+- **OpenCode**: Uses server hooks for redaction and tool restoration, plus a local TUI command for confirmed reveal.
 
 ---
 
@@ -15,19 +15,15 @@ Prevents sensitive credentials (API keys, passwords, database URIs, bearer token
 
 ### OpenCode Integration
 
-In OpenCode, masking occurs immediately before assembled model context is dispatched to the LLM. OpenCode's canonical conversation history and local file state remain intact with original values.
+In OpenCode, user messages and tool output are masked before they are persisted or rendered. Model context is masked again at dispatch as defense in depth.
 
 ```text
 User / files / tools
         |
         v
-OpenCode local context
+OpenCode hooks
         |
-        | original (unmodified)
-        v
-model request hook (messages.transform / context)
-        |
-        | mask regex matches -> __MASKED_<id>__
+        | mask regex matches -> __MASKED_<kind>_<random>__
         v
        LLM
         |
@@ -35,25 +31,26 @@ model request hook (messages.transform / context)
         +-----------------------+
         |                       |
         v                       v
-response restoration     tool argument restoration
-(text.complete)          (tool.execute.before)
+confirmed local reveal   tool argument restoration
+(temporary TUI dialog)   (tool.execute.before)
         |                       |
         v                       v
 Terminal / User          Local tool execution
-(original plain text)    (original plain values)
+(10 seconds)             (original plain values)
 ```
 
-1. **Outbound Model-Context Masking**: Assembled context (user prompts, previous tool outputs, file content, grep results) is inspected immediately before dispatch. Matches are replaced with deterministic tokens (e.g. `__MASKED_TOKEN_<hash>__`).
-2. **Session Vault (`vault.json`)**: Token-to-secret mappings are stored locally in `/tmp/claude_secret_vault/vault_<session>.json`.
+1. **Secure-by-default UI**: Canonical user messages and tool results remain redacted. There is no automatic assistant-response unmasking.
+2. **Memory broker**: One automatically started broker per OS user holds mappings in RAM. Clients communicate over a mode-`0600` Unix socket inside a mode-`0700` runtime directory. No plaintext vault file is written.
 3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution so scripts and file reads work transparently.
-4. **Response Restoration**: Completed model output text is unmasked so the user reads real values in the terminal.
-5. **Exact-Match Only**: Only tokens present in the current session's mapping store are restored. Invented or unknown tokens are left untouched.
+4. **Confirmed reveal**: Press the reveal shortcut, approve the confirmation, and OpenCode shows mappings in a local dialog for 10 seconds. Press it again to hide immediately.
+5. **Selection scope**: If terminal text is selected, only mask tokens inside that selection are revealed. A selection containing no tokens never falls back to revealing the whole session.
+6. **Session isolation**: Random 128-bit tokens and separate per-session maps prevent cross-session restoration. Sessions expire after inactivity and are cleared on supported session-end events.
 
 ### Claude Code Integration
 
 1. **Prompt Guard (`UserPromptSubmit`)**: Blocks prompt submission if raw secrets are typed directly.
-2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with deterministic tokens (`__MASKED_SECRET_<hash>__`) before sending to Claude.
-3. **Session Vault (`vault.py`)**: Stores token-to-secret mappings locally in `/tmp/claude_secret_vault/`.
+2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with random opaque tokens before sending to Claude.
+3. **Memory broker**: `SessionStart` starts or reuses the per-user broker; `SessionEnd` clears that session. No plaintext vault is written.
 4. **Terminal Unmasking (`MessageDisplay`)**: Restores original secrets in streamed responses so you read plain text.
 5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions so scripts and curl commands don't break.
 
@@ -84,7 +81,7 @@ Both Claude Code and OpenCode consume the same shared pattern configuration in `
 ]
 ```
 
-To add custom patterns, modify or extend `patterns.json`. Both Python and JavaScript masking engines automatically load this configuration.
+To add custom patterns, modify or extend `patterns.json`. The shared broker loads this configuration for both clients.
 
 ---
 
@@ -115,12 +112,17 @@ Bypass interactive prompts using flags:
 # Install only for OpenCode locally
 ./install.sh --install --opencode --local
 
+# Choose the OpenCode reveal shortcut during non-interactive installation
+./install.sh --install --opencode --local --reveal-keybind=ctrl+shift+r
+
 # Install only for Claude Code globally
 ./install.sh --install --claude --global
 
 # Uninstall OpenCode integration
 ./install.sh --uninstall --opencode --global
 ```
+
+The installer writes the shortcut under `keybinds.secret-redactor.ui.toggle` in the selected OpenCode `tui.json`. Change that value later to customize it. The default is `ctrl+shift+r`.
 
 ---
 
@@ -139,7 +141,7 @@ To cleanly remove redactor integrations without affecting other settings or hook
 
 What uninstallation does:
 - Removes the isolated redactor directories (`hooks/secret-redactor/` or `plugins/secret-redactor/`).
-- Creates a timestamped backup of your configuration (`settings.json` or `opencode.json` / `opencode.jsonc`).
+- Creates a timestamped backup of configuration it changes (`settings.json`, `opencode.json` / `opencode.jsonc`, or `tui.json`).
 - Removes only redactor hook/plugin registrations while leaving custom tools, settings, and other plugins completely intact.
 
 ---
@@ -164,5 +166,7 @@ python3 tests/test_lifecycle.py
 
 ## Architecture & Limitations
 
-- **OpenCode V1 vs V2**: OpenCode 1.x uses `experimental.chat.messages.transform` for outbound context masking, `tool.execute.before` for argument restoration, and `experimental.text.complete` for assistant response restoration. The plugin also provides an adapter for OpenCode V2 request hooks (`context`, `compaction`, `generate`, `title`).
-- **Prompt Admission**: Masking intentionally occurs when context is assembled for model dispatch, preserving OpenCode's canonical conversation database without mutating the user's stored prompts.
+- **OpenCode transcript limitation**: The public TUI API does not let plugins rewrite the built-in transcript in place. Confirmed plaintext therefore appears in a temporary local dialog; the stored transcript stays redacted.
+- **Platform support**: The broker requires Unix-domain sockets (Linux, macOS, or WSL). Native Windows is not currently supported.
+- **Threat model**: This removes plaintext-at-rest aggregation and restricts the socket to the current OS user. It does not protect against malware or an attacker already running code as that same user, who may inspect process memory or interact with the local socket.
+- **Claude display behavior**: Claude Code currently restores masked values through its local `MessageDisplay` hook. The confirmed, timed reveal command described above is OpenCode-specific.
