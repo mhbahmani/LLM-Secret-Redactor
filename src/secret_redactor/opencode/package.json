@@ -1,0 +1,7 @@
+{
+  "name": "secret-redactor-opencode",
+  "version": "1.0.0",
+  "description": "Zero-leak secret redactor plugin for OpenCode",
+  "main": "plugin.mjs",
+  "type": "commonjs"
+}
