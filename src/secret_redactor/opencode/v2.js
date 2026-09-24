@@ -1,4 +1,4 @@
-const { unmaskText, unmaskRecursive, maskText } = require("./vault.js");
+const { unmaskRecursive, maskText, maskRecursive, clearSession } = require("./vault.js");
 const { maskModelMessages } = require("./transformer.js");
 
 // TODO: Consider optional prompt-admission masking in the future.
@@ -8,20 +8,27 @@ const { maskModelMessages } = require("./transformer.js");
 // TODO: Consider adding a minimal system instruction asking the model
 // to preserve mask tokens exactly. Keep system prompts unchanged for now.
 
-function registerV2Hooks(ctx, maskUi = false) {
+function registerV2Hooks(ctx) {
   if (!ctx) return;
-  // ponytail: V2 has no chat.message or text.complete equivalent hooks.
-  // maskUi accepted for API consistency; V2 assistant text stays masked regardless.
 
   const handleModelRequest = async (event) => {
     const sessionID = event?.sessionID || ctx?.sessionID || "default";
     if (event?.messages) {
-      maskModelMessages(event.messages, sessionID);
+      await maskModelMessages(event.messages, sessionID);
     }
   };
 
   // Normal agent context requests
   if (ctx.session?.hook) {
+    ctx.session.hook("prompt", async (event) => {
+      const sessionID = event?.sessionID || ctx?.sessionID || "default";
+      for (const part of (event?.parts || [])) {
+        if (part && typeof part.text === "string") {
+          const [masked] = await maskText(part.text, sessionID);
+          part.text = masked;
+        }
+      }
+    });
     ctx.session.hook("context", handleModelRequest);
     ctx.session.hook("compaction", handleModelRequest);
     ctx.session.hook("generate", handleModelRequest);
@@ -33,11 +40,27 @@ function registerV2Hooks(ctx, maskUi = false) {
     ctx.tool.hook("execute.before", async (event) => {
       const sessionID = event?.sessionID || ctx?.sessionID || "default";
       if (event && event.args !== undefined) {
-        const [unmasked, changed] = unmaskRecursive(event.args, sessionID);
+        const [unmasked, changed] = await unmaskRecursive(event.args, sessionID);
         if (changed) {
           event.args = unmasked;
         }
       }
+    });
+    ctx.tool.hook("execute.after", async (event) => {
+      const sessionID = event?.sessionID || ctx?.sessionID || "default";
+      if (typeof event?.output === "string") {
+        const [masked] = await maskText(event.output, sessionID);
+        event.output = masked;
+      } else if (event?.output && typeof event.output === "object") {
+        const [masked] = await maskRecursive(event.output, sessionID);
+        event.output = masked;
+      }
+    });
+  }
+
+  if (ctx.event?.subscribe) {
+    ctx.event.subscribe("session.deleted", async (event) => {
+      if (event?.sessionID) await clearSession(event.sessionID);
     });
   }
 }

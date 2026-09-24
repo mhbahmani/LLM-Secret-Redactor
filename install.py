@@ -8,10 +8,15 @@ import urllib.request
 from datetime import datetime
 
 APP_NAME = "secret-redactor"
+REVEAL_COMMAND = "secret-redactor.ui.toggle"
+DEFAULT_REVEAL_KEYBIND = "ctrl+shift+r"
 
 CLAUDE_FILES = [
+    ("broker.py", "broker.py"),
     ("vault.py", "vault.py"),
     ("patterns.json", "patterns.json"),
+    ("session_start.py", "session_start.py"),
+    ("session_end.py", "session_end.py"),
     ("user_prompt_submit.py", "user_prompt_submit.py"),
     ("post_tool_use.py", "post_tool_use.py"),
     ("message_display.py", "message_display.py"),
@@ -19,6 +24,7 @@ CLAUDE_FILES = [
 ]
 
 OPENCODE_FILES = [
+    ("broker.py", "broker.py"),
     ("vault.js", "vault.js"),
     ("patterns.json", "patterns.json"),
     ("opencode/transformer.js", "transformer.js"),
@@ -27,6 +33,9 @@ OPENCODE_FILES = [
     ("opencode/index.js", "index.js"),
     ("opencode/plugin.js", "plugin.js"),
     ("opencode/plugin.mjs", "plugin.mjs"),
+    ("opencode/plugin-v2.mjs", "plugin-v2.mjs"),
+    ("opencode/tui.mjs", "tui.mjs"),
+    ("opencode/ui-reveal.js", "ui-reveal.js"),
     ("opencode/package.json", "package.json")
 ]
 
@@ -263,6 +272,8 @@ def do_install_claude(chosen_dir, local_repo_dir):
 
     hooks = settings.setdefault("hooks", {})
     hooks_def = {
+        "SessionStart": f"{hook_path_prefix}/session_start.py",
+        "SessionEnd": f"{hook_path_prefix}/session_end.py",
         "UserPromptSubmit": f"{hook_path_prefix}/user_prompt_submit.py",
         "PostToolUse": f"{hook_path_prefix}/post_tool_use.py",
         "MessageDisplay": f"{hook_path_prefix}/message_display.py",
@@ -354,6 +365,70 @@ def remove_opencode_config(config_file, plugin_entries):
             f.write(content)
         print(f"Removed redactor plugin entry from {config_file}")
 
+def opencode_tui_config_path(chosen_dir):
+    override = os.environ.get("OPENCODE_TUI_CONFIG")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.join(chosen_dir, "tui.json")
+
+def update_opencode_tui_config(chosen_dir, keybind):
+    config_file = opencode_tui_config_path(chosen_dir)
+    config = {}
+    if os.path.isfile(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    plugin_entry = f"./plugins/{APP_NAME}/tui.mjs"
+    plugins = config.setdefault("plugin", [])
+    keybinds = config.setdefault("keybinds", {})
+    changed = False
+    if plugin_entry not in plugins:
+        plugins.append(plugin_entry)
+        changed = True
+    if keybinds.get(REVEAL_COMMAND) != keybind:
+        keybinds[REVEAL_COMMAND] = keybind
+        changed = True
+    if not changed:
+        return
+    if os.path.isfile(config_file):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        shutil.copy2(config_file, f"{config_file}.backup_{ts}")
+    else:
+        os.makedirs(os.path.dirname(config_file), exist_ok=True)
+        config.setdefault("$schema", "https://opencode.ai/tui.json")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    print(f"Configured OpenCode reveal UI and keybinding {keybind!r} in {config_file}")
+
+def remove_opencode_tui_config(chosen_dir):
+    config_file = opencode_tui_config_path(chosen_dir)
+    if not os.path.isfile(config_file):
+        return
+    with open(config_file, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    keybinds = config.get("keybinds", {})
+    plugins = config.get("plugin", [])
+    plugin_entry = f"./plugins/{APP_NAME}/tui.mjs"
+    changed = False
+    if REVEAL_COMMAND in keybinds:
+        del keybinds[REVEAL_COMMAND]
+        changed = True
+    if plugin_entry in plugins:
+        config["plugin"] = [entry for entry in plugins if entry != plugin_entry]
+        changed = True
+    if not changed:
+        return
+    if not keybinds:
+        config.pop("keybinds", None)
+    if not config.get("plugin"):
+        config.pop("plugin", None)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    shutil.copy2(config_file, f"{config_file}.backup_{ts}")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    print(f"Removed OpenCode reveal UI configuration from {config_file}")
+
 def do_uninstall_opencode(chosen_dir, is_global):
     print(f"\nUninstalling LLM Secret Redactor (OpenCode) from {chosen_dir}...")
     plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
@@ -367,6 +442,7 @@ def do_uninstall_opencode(chosen_dir, is_global):
         f"./.opencode/plugins/{APP_NAME}.js",
     ]
     remove_opencode_config(config_file, remove_entries)
+    remove_opencode_tui_config(chosen_dir)
 
     if os.path.isdir(plugins_dir):
         shutil.rmtree(plugins_dir)
@@ -385,7 +461,7 @@ def do_uninstall_opencode(chosen_dir, is_global):
     if os.path.isdir(parent_plugins) and not os.listdir(parent_plugins):
         os.rmdir(parent_plugins)
 
-def do_install_opencode(chosen_dir, is_global, local_repo_dir, mask_ui=False):
+def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DEFAULT_REVEAL_KEYBIND):
     plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
     os.makedirs(plugins_dir, exist_ok=True)
 
@@ -405,10 +481,7 @@ def do_install_opencode(chosen_dir, is_global, local_repo_dir, mask_ui=False):
     # Registering the nested implementation in opencode.json as well would load
     # the redactor twice, so the top-level trampoline is the only entry point.
 
-    redactor_config = os.path.join(chosen_dir, "secret-redactor.json")
-    with open(redactor_config, "w", encoding="utf-8") as f:
-        json.dump({"maskUi": mask_ui}, f, indent=2)
-    print(f"Wrote maskUi={mask_ui} to {redactor_config}")
+    update_opencode_tui_config(chosen_dir, reveal_keybind)
 
     print(f"✓ OpenCode plugin installed in {plugins_dir}")
 
@@ -441,13 +514,12 @@ def parse_args():
         if arg.startswith("--client="):
             client = arg.split("=", 1)[1].lower()
 
-    mask_ui = None
-    if "--mask-ui" in sys.argv:
-        mask_ui = True
-    elif "--no-mask-ui" in sys.argv:
-        mask_ui = False
+    reveal_keybind = None
+    for arg in sys.argv:
+        if arg.startswith("--reveal-keybind="):
+            reveal_keybind = arg.split("=", 1)[1]
 
-    return action, scope, client, mask_ui
+    return action, scope, client, reveal_keybind
 
 def main():
     print("==========================================")
@@ -460,7 +532,7 @@ def main():
     if "__file__" in globals() and os.path.isfile(__file__):
         caller_dir = os.path.dirname(os.path.abspath(__file__))
 
-    cli_action, cli_scope, cli_client, cli_mask_ui = parse_args()
+    cli_action, cli_scope, cli_client, cli_reveal_keybind = parse_args()
 
     # 1. Action
     if cli_action:
@@ -503,23 +575,16 @@ def main():
 
     is_global = (scope == "global")
 
-    mask_ui = False
+    reveal_keybind = cli_reveal_keybind or DEFAULT_REVEAL_KEYBIND
     if client in ("opencode", "all"):
-        if cli_mask_ui is not None:
-            mask_ui = cli_mask_ui
-        elif action == "install":
-            mask_ui_options = [
-                ("No", "Show real secrets in UI; mask only what's sent to model (default)"),
-                ("Yes", "Mask secrets everywhere in UI, including user prompt and assistant output")
-            ]
-            mask_ui_idx = prompt_menu("Mask secrets in UI?", mask_ui_options)
-            mask_ui = mask_ui_idx == 1
+        if action == "install" and cli_reveal_keybind is None:
+            reveal_keybind = prompt_input("OpenCode reveal keybinding", DEFAULT_REVEAL_KEYBIND)
 
     print(f"\nSelected action: {action.upper()}")
     print(f"Selected client: {client.upper()}")
     print(f"Selected scope:  {scope.capitalize()}")
     if client in ("opencode", "all"):
-        print(f"Mask UI:         {mask_ui}")
+        print(f"Reveal keybind:   {reveal_keybind}")
 
     # Paths
     if client in ("claude", "all"):
@@ -546,7 +611,7 @@ def main():
         if action == "uninstall":
             do_uninstall_opencode(chosen_opencode_dir, is_global)
         else:
-            do_install_opencode(chosen_opencode_dir, is_global, caller_dir, mask_ui)
+            do_install_opencode(chosen_opencode_dir, is_global, caller_dir, reveal_keybind)
 
     print("\n==========================================")
     print(f"✓ {action.capitalize()} completed successfully!")

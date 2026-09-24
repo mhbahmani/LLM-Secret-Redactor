@@ -1,10 +1,14 @@
-import os
 import json
+import os
 import re
-import hashlib
-from typing import Tuple, Dict, Any
+import socket
+import stat
+import subprocess
+import sys
+import time
+from typing import Any, Dict, Tuple
 
-# Load secret patterns from patterns.json with hardcoded fallback
+
 DEFAULT_PATTERNS = [
     {"name": "Anthropic key", "pattern": r"sk-ant-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
     {"name": "OpenAI key", "pattern": r"sk-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
@@ -16,197 +20,155 @@ DEFAULT_PATTERNS = [
     {"name": "JWT token pattern", "pattern": r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}", "kind": "JWT_TOKEN"},
 ]
 
+
 def load_patterns():
     candidates = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "patterns.json"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patterns.json"),
         os.path.join(os.getcwd(), "patterns.json"),
     ]
     raw_patterns = None
-    for c in candidates:
-        if os.path.isfile(c):
+    for candidate in candidates:
+        if os.path.isfile(candidate):
             try:
-                with open(c, "r", encoding="utf-8") as f:
-                    raw_patterns = json.load(f)
+                with open(candidate, "r", encoding="utf-8") as handle:
+                    raw_patterns = json.load(handle)
                 break
             except Exception:
-                pass
-    if not raw_patterns:
-        raw_patterns = DEFAULT_PATTERNS
-
+                continue
     compiled = []
-    for item in raw_patterns:
-        flags = 0
-        if "i" in item.get("flags", ""):
-            flags |= re.IGNORECASE
+    for item in raw_patterns or DEFAULT_PATTERNS:
+        flags = re.IGNORECASE if "i" in item.get("flags", "") else 0
         compiled.append((re.compile(item["pattern"], flags), item["kind"]))
     return compiled
 
+
 SECRET_PATTERNS = load_patterns()
+BROKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broker.py")
+_BROKER_PROCESS = None
 
-VAULT_DIR = os.environ.get("VAULT_DIR", "/tmp/claude_secret_vault")
 
-def get_vault_path(session_id: str) -> str:
-    os.makedirs(VAULT_DIR, mode=0o700, exist_ok=True)
-    os.chmod(VAULT_DIR, 0o700)
-    safe_session = re.sub(r"[^a-zA-Z0-9_\-]", "_", session_id or "default")
-    return os.path.join(VAULT_DIR, f"vault_{safe_session}.json")
+def get_runtime_dir() -> str:
+    override = os.environ.get("SECRET_REDACTOR_RUNTIME_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if base:
+        return os.path.join(base, "llm-secret-redactor")
+    return os.path.join("/tmp", f"llm-secret-redactor-{os.getuid()}")
 
-def load_vault(session_id: str) -> Dict[str, str]:
-    path = get_vault_path(session_id)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as exc:
-        raise RuntimeError(f"Unable to read secret vault {path}: {exc}") from exc
 
-def save_vault(session_id: str, vault: Dict[str, str]):
-    path = get_vault_path(session_id)
-    temp_path = f"{path}.{os.getpid()}.tmp"
-    try:
-        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(vault, f, indent=2)
-        os.replace(temp_path, path)
-        os.chmod(path, 0o600)
-    except Exception as exc:
+def get_socket_path() -> str:
+    return os.path.join(get_runtime_dir(), "broker.sock")
+
+
+def _ensure_runtime_dir():
+    directory = get_runtime_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    info = os.lstat(directory)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError(f"Unsafe broker runtime directory: {directory}")
+    os.chmod(directory, 0o700)
+
+
+def _send(request: Dict[str, Any]) -> Dict[str, Any]:
+    encoded = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(3)
+        client.connect(get_socket_path())
+        client.sendall(encoded)
+        chunks = bytearray()
+        while not chunks.endswith(b"\n"):
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.extend(chunk)
+            if len(chunks) > 16 * 1024 * 1024:
+                raise RuntimeError("Secret broker response exceeded size limit")
+    if not chunks:
+        raise RuntimeError("Secret broker returned an empty response")
+    response = json.loads(chunks)
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "Secret broker request failed"))
+    return response
+
+
+def _start_broker():
+    global _BROKER_PROCESS
+    if not os.path.isfile(BROKER_SCRIPT):
+        raise RuntimeError(f"Secret broker executable is missing: {BROKER_SCRIPT}")
+    _ensure_runtime_dir()
+    _BROKER_PROCESS = subprocess.Popen(
+        [sys.executable, BROKER_SCRIPT, "--serve"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 3
+    last_error = None
+    while time.monotonic() < deadline:
         try:
-            os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
-        raise RuntimeError(f"Unable to persist secret vault {path}: {exc}") from exc
+            _send({"operation": "ping"})
+            return
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.025)
+    raise RuntimeError(f"Secret broker did not start: {last_error}")
 
-def _make_token(prefix: str, secret: str) -> str:
-    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:8].upper()
-    return f"__MASKED_{prefix}_{digest}__"
+
+def broker_request(operation: str, session_id: str = "default", value: Any = None) -> Dict[str, Any]:
+    request = {"operation": operation, "session": session_id or "default"}
+    if value is not None:
+        request["value"] = value
+    try:
+        return _send(request)
+    except (FileNotFoundError, ConnectionRefusedError, socket.timeout, RuntimeError):
+        _start_broker()
+        return _send(request)
+
 
 def mask_text(text: str, session_id: str) -> Tuple[str, Dict[str, str]]:
     if not isinstance(text, str) or not text:
         return text, {}
+    response = broker_request("mask", session_id, text)
+    return response["value"], response.get("mappings", {})
 
-    vault = load_vault(session_id)
-    updated = False
-
-    # 1. Check KV secrets
-    def kv_sub(m: re.Match) -> str:
-        nonlocal updated
-        prefix_chars, secret, suffix_chars = m.group(1), m.group(2), m.group(3)
-        # Avoid double masking existing masked tokens
-        if secret.startswith("__MASKED_") and secret.endswith("__"):
-            return m.group(0)
-        token = _make_token("SECRET", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"{prefix_chars}{token}{suffix_chars}"
-
-    # 2. Check URI password
-    def uri_sub(m: re.Match) -> str:
-        nonlocal updated
-        prefix, secret, suffix = m.group(1), m.group(2), m.group(3)
-        token = _make_token("URIPASS", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"{prefix}{token}{suffix}"
-
-    # 3. Check Bearer token
-    def bearer_sub(m: re.Match) -> str:
-        nonlocal updated
-        secret = m.group(1)
-        token = _make_token("BEARER", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"Bearer {token}"
-
-    # Standard patterns
-    for regex, kind in SECRET_PATTERNS:
-        if kind == "KV_SECRET":
-            text = regex.sub(kv_sub, text)
-        elif kind == "URI_PASS":
-            text = regex.sub(uri_sub, text)
-        elif kind == "BEARER_TOKEN":
-            text = regex.sub(bearer_sub, text)
-        else:
-            def std_sub(m: re.Match, kind=kind) -> str:
-                nonlocal updated
-                secret = m.group(0)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return secret
-                token = _make_token(kind, secret)
-                if vault.get(token) != secret:
-                    vault[token] = secret
-                    updated = True
-                return token
-            text = regex.sub(std_sub, text)
-
-    if updated:
-        save_vault(session_id, vault)
-
-    return text, vault
 
 def unmask_text(text: str, session_id: str) -> str:
     if not isinstance(text, str) or not text:
         return text
+    return broker_request("unmask", session_id, text)["value"]
 
-    vault = load_vault(session_id)
-    if not vault:
-        return text
-
-    # Sort tokens longest first to avoid partial collision
-    for token, secret in sorted(vault.items(), key=lambda x: len(x[0]), reverse=True):
-        if token in text:
-            text = text.replace(token, secret)
-
-    return text
 
 def mask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
-    if isinstance(obj, str):
-        masked, _ = mask_text(obj, session_id)
-        return masked, masked != obj
-    elif isinstance(obj, dict):
-        new_dict = {}
-        changed = False
-        for k, v in obj.items():
-            new_v, ch = mask_recursive(v, session_id)
-            new_dict[k] = new_v
-            if ch:
-                changed = True
-        return new_dict, changed
-    elif isinstance(obj, list):
-        new_list = []
-        changed = False
-        for item in obj:
-            new_item, ch = mask_recursive(item, session_id)
-            new_list.append(new_item)
-            if ch:
-                changed = True
-        return new_list, changed
-    return obj, False
+    response = broker_request("mask", session_id, obj)
+    return response["value"], bool(response.get("changed"))
+
 
 def unmask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
-    if isinstance(obj, str):
-        unmasked = unmask_text(obj, session_id)
-        return unmasked, unmasked != obj
-    elif isinstance(obj, dict):
-        new_dict = {}
-        changed = False
-        for k, v in obj.items():
-            new_v, ch = unmask_recursive(v, session_id)
-            new_dict[k] = new_v
-            if ch:
-                changed = True
-        return new_dict, changed
-    elif isinstance(obj, list):
-        new_list = []
-        changed = False
-        for item in obj:
-            new_item, ch = unmask_recursive(item, session_id)
-            new_list.append(new_item)
-            if ch:
-                changed = True
-        return new_list, changed
-    return obj, False
+    response = broker_request("unmask", session_id, obj)
+    return response["value"], bool(response.get("changed"))
+
+
+def clear_session(session_id: str):
+    broker_request("clear", session_id)
+
+
+def broker_stats():
+    return broker_request("stats")
+
+
+def shutdown_broker():
+    global _BROKER_PROCESS
+    try:
+        response = _send({"operation": "shutdown"})
+        if _BROKER_PROCESS is not None:
+            try:
+                _BROKER_PROCESS.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        _BROKER_PROCESS = None
+        return response
+    except (OSError, RuntimeError):
+        return {"ok": True}

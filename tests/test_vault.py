@@ -2,20 +2,35 @@ import unittest
 import os
 import sys
 import shutil
+import tempfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+TEST_RUNTIME_DIR = tempfile.mkdtemp(prefix="llm-redactor-python-")
+os.environ["SECRET_REDACTOR_RUNTIME_DIR"] = TEST_RUNTIME_DIR
 
-from secret_redactor.vault import mask_text, unmask_text, mask_recursive, unmask_recursive
+from secret_redactor.vault import (
+    mask_text,
+    unmask_text,
+    mask_recursive,
+    unmask_recursive,
+    clear_session,
+    broker_stats,
+    shutdown_broker,
+)
 
 class TestVaultCore(unittest.TestCase):
     def setUp(self):
         self.session_id = "test-core-session"
-        self.vault_dir = "/tmp/claude_secret_vault"
-        shutil.rmtree(self.vault_dir, ignore_errors=True)
+        clear_session(self.session_id)
 
     def tearDown(self):
-        shutil.rmtree(self.vault_dir, ignore_errors=True)
+        clear_session(self.session_id)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutdown_broker()
+        shutil.rmtree(TEST_RUNTIME_DIR, ignore_errors=True)
 
     def test_mask_and_unmask_openai_key(self):
         secret = "sk-proj-1234567890abcdef1234567890"
@@ -59,6 +74,12 @@ class TestVaultCore(unittest.TestCase):
         unmasked_data, changed_back = unmask_recursive(masked_data, self.session_id)
         self.assertTrue(changed_back)
         self.assertEqual(unmasked_data, data)
+
+    def test_single_broker_process_is_reused(self):
+        first = broker_stats()["pid"]
+        second = broker_stats()["pid"]
+        self.assertEqual(first, second)
+        self.assertEqual(os.listdir(TEST_RUNTIME_DIR), ["broker.sock"])
 
 if __name__ == "__main__":
     unittest.main()

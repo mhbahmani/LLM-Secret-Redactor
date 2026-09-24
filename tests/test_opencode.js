@@ -4,8 +4,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 
-const TEST_VAULT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-opencode-"));
-process.env.VAULT_DIR = TEST_VAULT_DIR;
+const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-opencode-"));
+process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
+process.env.SECRET_REDACTOR_BROKER_IDLE = "10";
 
 const vault = require("../src/secret_redactor/vault.js");
 const plugin = require("../src/secret_redactor/opencode/index.js");
@@ -13,22 +14,10 @@ const { maskModelMessages } = require("../src/secret_redactor/opencode/transform
 const { createV1Hooks } = require("../src/secret_redactor/opencode/v1.js");
 const { registerV2Hooks } = require("../src/secret_redactor/opencode/v2.js");
 
-function cleanTestVaults() {
-  try {
-    if (fs.existsSync(TEST_VAULT_DIR)) {
-      const files = fs.readdirSync(TEST_VAULT_DIR);
-      for (const f of files) {
-        fs.unlinkSync(path.join(TEST_VAULT_DIR, f));
-      }
-    }
-  } catch {
-    // Ignore
-  }
-}
-
-test.beforeEach(cleanTestVaults);
-test.afterEach(cleanTestVaults);
-test.after(() => fs.rmSync(TEST_VAULT_DIR, { recursive: true, force: true }));
+test.after(async () => {
+  await vault.shutdownBroker();
+  fs.rmSync(TEST_RUNTIME_DIR, { recursive: true, force: true });
+});
 
 test("Outbound message masking: original -> mask before model request", async () => {
   const sessionID = "test-outbound";
@@ -159,51 +148,59 @@ test("Repeated values receive deterministic identical mask token", async () => {
   assert.equal(matches[0], matches[1]);
 });
 
-test("Assistant response restoration: mask token -> real secret", async () => {
-  const sessionID = "test-response-restore";
+test("Assistant responses remain redacted until explicit local reveal", async () => {
   const hooks = await plugin({});
-
-  // Mask a secret first to populate vault
-  const [_, v] = vault.maskText("secret token ghp_123456789012345678901234567890123456", sessionID);
-  const token = Object.keys(v)[0];
-  assert.ok(token);
-
-  // Model returns the token
-  const modelResponse = { text: `Found token ${token}. Authentication succeeded.` };
-  await hooks["experimental.text.complete"]({ sessionID }, modelResponse);
-
-  assert.ok(!modelResponse.text.includes(token));
-  assert.ok(modelResponse.text.includes("ghp_123456789012345678901234567890123456"));
+  assert.equal(hooks["experimental.text.complete"], undefined);
 });
 
-test("Unknown mask tokens remain untouched (exact match only)", async () => {
-  const sessionID = "test-unknown-token";
-  const hooks = await plugin({});
-
-  const unknownToken = "__MASKED_UNKNOWN_99999999__";
-  const modelResponse = { text: `Connecting with ${unknownToken}` };
-  await hooks["experimental.text.complete"]({ sessionID }, modelResponse);
-
-  // Token remains untouched because it is not in vault
-  assert.equal(modelResponse.text, `Connecting with ${unknownToken}`);
-});
-
-test("Corrupt vault state fails closed instead of losing restoration data", () => {
-  const sessionID = "test-corrupt-vault";
-  fs.writeFileSync(vault.getVaultPath(sessionID), "not-json", "utf-8");
-
-  assert.throws(
-    () => vault.maskText("key sk-proj-1234567890abcdef1234567890", sessionID),
-    /Unable to read secret vault/
-  );
-});
-
-test("Vault directory and files are private to the current user", () => {
+test("Broker socket is private and no plaintext vault file is created", async () => {
   const sessionID = "test-private-vault";
-  vault.maskText("key sk-proj-1234567890abcdef1234567890", sessionID);
+  await vault.maskText("key sk-proj-1234567890abcdef1234567890", sessionID);
 
-  assert.equal(fs.statSync(TEST_VAULT_DIR).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(vault.getVaultPath(sessionID)).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(TEST_RUNTIME_DIR).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(vault.getSocketPath()).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(TEST_RUNTIME_DIR), ["broker.sock"]);
+});
+
+test("Concurrent clients reuse one broker process", async () => {
+  const stats = await Promise.all(Array.from({ length: 8 }, () => vault.brokerStats()));
+  assert.equal(new Set(stats.map((item) => item.pid)).size, 1);
+});
+
+test("Concurrent OS processes converge on one cold-start broker", async () => {
+  const { spawn } = require("node:child_process");
+  const isolatedRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-race-"));
+  const vaultPath = path.resolve(__dirname, "../src/secret_redactor/vault.js");
+  const runClient = (expression) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", expression], {
+      env: {
+        ...process.env,
+        SECRET_REDACTOR_RUNTIME_DIR: isolatedRuntime,
+        SECRET_REDACTOR_BROKER_IDLE: "10",
+        TEST_VAULT_PATH: vaultPath,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code !== 0) reject(new Error(stderr || `client exited ${code}`));
+      else resolve(stdout.trim());
+    });
+  });
+
+  try {
+    const expression = "require(process.env.TEST_VAULT_PATH).brokerStats().then(x => console.log(x.pid))";
+    const pids = await Promise.all(Array.from({ length: 8 }, () => runClient(expression)));
+    assert.equal(new Set(pids).size, 1);
+  } finally {
+    await runClient("require(process.env.TEST_VAULT_PATH).shutdownBroker()")
+      .catch(() => {});
+    fs.rmSync(isolatedRuntime, { recursive: true, force: true });
+  }
 });
 
 test("Tool argument restoration before local execution", async () => {
@@ -211,7 +208,7 @@ test("Tool argument restoration before local execution", async () => {
   const hooks = await plugin({});
 
   // Populate vault
-  const [_, v] = vault.maskText("token ghp_123456789012345678901234567890123456", sessionID);
+  const [_, v] = await vault.maskText("token ghp_123456789012345678901234567890123456", sessionID);
   const token = Object.keys(v)[0];
 
   const toolInput = {
@@ -230,10 +227,10 @@ test("Nested tool arguments (objects and arrays) restoration", async () => {
   const sessionID = "test-nested-args";
   const hooks = await plugin({});
 
-  const [, v1] = vault.maskText("url postgres://admin:Pass123!@localhost/db", sessionID);
+  const [, v1] = await vault.maskText("url postgres://admin:Pass123!@localhost/db", sessionID);
   const token1 = Object.keys(v1).find(k => k.includes("URIPASS"));
 
-  const [, v2] = vault.maskText("api_key='SuperSecret456'", sessionID);
+  const [, v2] = await vault.maskText("api_key='SuperSecret456'", sessionID);
   const token2 = Object.keys(v2).find(k => k.includes("SECRET"));
 
   const nestedArgs = {
@@ -263,7 +260,7 @@ test("Session isolation: sessions do not cross-unmask tokens", async () => {
   const hooks = await plugin({});
 
   // Secret in session A
-  const [_, vaultA] = vault.maskText("key sk-proj-1111111111111111111111111111", sessionA);
+  const [_, vaultA] = await vault.maskText("key sk-proj-1111111111111111111111111111", sessionA);
   const tokenA = Object.keys(vaultA)[0];
 
   // Try unmasking in session B
@@ -289,16 +286,21 @@ test("OpenCode V2 hook registration and execution", async () => {
     },
     tool: {
       hook: (name, fn) => { toolHooks[name] = fn; }
+    },
+    event: {
+      subscribe: () => {}
     }
   };
 
   await plugin(mockCtx);
 
   assert.ok(typeof sessionHooks["context"] === "function");
+  assert.ok(typeof sessionHooks["prompt"] === "function");
   assert.ok(typeof sessionHooks["compaction"] === "function");
   assert.ok(typeof sessionHooks["generate"] === "function");
   assert.ok(typeof sessionHooks["title"] === "function");
   assert.ok(typeof toolHooks["execute.before"] === "function");
+  assert.ok(typeof toolHooks["execute.after"] === "function");
 
   // Test V2 context masking
   const v2Event = {
@@ -323,29 +325,18 @@ test("OpenCode V2 hook registration and execution", async () => {
   };
   await toolHooks["execute.before"](toolEvent);
   assert.equal(toolEvent.args.key, "sk-proj-1234567890abcdef1234567890");
+
+  const toolResult = { sessionID, output: "token ghp_123456789012345678901234567890123456" };
+  await toolHooks["execute.after"](toolResult);
+  assert.ok(!toolResult.output.includes("ghp_123456789012345678901234567890123456"));
 });
 
-test("maskUi=false (default): chat.message not registered, text.complete unmasks", async () => {
-  const sessionID = "test-maskui-false";
+test("V1 canonical messages are always masked and never auto-revealed", async () => {
+  const sessionID = "test-secure-ui";
   const hooks = createV1Hooks(false);
 
-  assert.equal(hooks["chat.message"], undefined);
-  assert.equal(typeof hooks["experimental.text.complete"], "function");
-
-  const [, v] = vault.maskText("token ghp_123456789012345678901234567890123456", sessionID);
-  const token = Object.keys(v)[0];
-
-  const response = { text: `Found ${token}` };
-  await hooks["experimental.text.complete"]({ sessionID }, response);
-  assert.ok(response.text.includes("ghp_123456789012345678901234567890123456"));
-});
-
-test("maskUi=true: chat.message masks prompt, text.complete skips unmask", async () => {
-  const sessionID = "test-maskui-true";
-  const hooks = createV1Hooks(true);
-
   assert.equal(typeof hooks["chat.message"], "function");
-  assert.equal(typeof hooks["experimental.text.complete"], "function");
+  assert.equal(hooks["experimental.text.complete"], undefined);
 
   const secret = "sk-proj-1234567890abcdef1234567890";
   const promptOutput = { parts: [{ type: "text", text: `Use ${secret} now` }] };
@@ -354,24 +345,6 @@ test("maskUi=true: chat.message masks prompt, text.complete skips unmask", async
   assert.ok(!promptOutput.parts[0].text.includes(secret));
   assert.ok(promptOutput.parts[0].text.includes("__MASKED_"));
 
-  const token = promptOutput.parts[0].text.match(/__MASKED_[A-Z_0-9]+__/)[0];
-  const response = { text: `Result ${token} done` };
-  await hooks["experimental.text.complete"]({ sessionID }, response);
-
-  assert.ok(!response.text.includes(secret));
-  assert.ok(response.text.includes(token));
-});
-
-test("maskUi via env var override", async () => {
-  const prev = process.env.SECRET_REDACTOR_MASK_UI;
-  process.env.SECRET_REDACTOR_MASK_UI = "1";
-  try {
-    const hooks = await plugin({});
-    assert.equal(typeof hooks["chat.message"], "function");
-  } finally {
-    if (prev === undefined) delete process.env.SECRET_REDACTOR_MASK_UI;
-    else process.env.SECRET_REDACTOR_MASK_UI = prev;
-  }
 });
 
 test("Cross-engine parity: Python and JavaScript interoperability", async () => {
@@ -391,12 +364,12 @@ print(json.dumps({"masked": masked, "vault": v}))
   const { vault: pyVault } = JSON.parse(pyProc.stdout);
   const pyToken = Object.keys(pyVault)[0];
 
-  const jsUnmasked = vault.unmaskText(pyToken, sessionID);
+  const jsUnmasked = await vault.unmaskText(pyToken, sessionID);
   assert.equal(jsUnmasked, secret);
 
   // 2. JS masks, Python unmasks
   const secretGh = "ghp_123456789012345678901234567890123456";
-  const [, jsVault] = vault.maskText(`gh: ${secretGh}`, sessionID);
+  const [, jsVault] = await vault.maskText(`gh: ${secretGh}`, sessionID);
   const jsToken = Object.keys(jsVault).find(k => jsVault[k] === secretGh);
 
   const pyCode2 = `

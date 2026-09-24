@@ -4,13 +4,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 
-const TEST_VAULT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-e2e-"));
-process.env.VAULT_DIR = TEST_VAULT_DIR;
+const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-e2e-"));
+process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 
 const plugin = require("../src/secret_redactor/opencode/index.js");
 const vault = require("../src/secret_redactor/vault.js");
 
-test.after(() => fs.rmSync(TEST_VAULT_DIR, { recursive: true, force: true }));
+test.after(async () => {
+  await vault.shutdownBroker();
+  fs.rmSync(TEST_RUNTIME_DIR, { recursive: true, force: true });
+});
 
 test("End-to-end lifecycle flow for OpenCode", async () => {
   const sessionID = "test-e2e-session";
@@ -30,9 +33,10 @@ test("End-to-end lifecycle flow for OpenCode", async () => {
     ]
   };
 
-  // 2. OpenCode local state retains the original sensitive values
-  assert.ok(canonicalUserMessage.parts[0].text.includes(sensitiveHost));
-  assert.ok(canonicalUserMessage.parts[0].text.includes(rawApiKey));
+  // 2. Canonical UI state is masked before OpenCode persists or renders it.
+  await hooks["chat.message"]({ sessionID }, canonicalUserMessage);
+  assert.ok(!canonicalUserMessage.parts[0].text.includes(sensitiveHost));
+  assert.ok(!canonicalUserMessage.parts[0].text.includes(rawApiKey));
 
   // Clone in-memory model context before dispatch (OpenCode behavior)
   const modelVisibleMessages = JSON.parse(JSON.stringify([canonicalUserMessage]));
@@ -49,24 +53,24 @@ test("End-to-end lifecycle flow for OpenCode", async () => {
   assert.ok(modelText.includes("__MASKED_TOKEN_"));
 
   // 4. Mapping store contains the mappings
-  const vaultData = vault.loadVault(sessionID);
-  const uriToken = Object.keys(vaultData).find(k => k.includes("URIPASS"));
-  const keyToken = Object.keys(vaultData).find(k => k.includes("TOKEN"));
+  const uriToken = modelText.match(/__MASKED_URIPASS_[A-F0-9]+__/)[0];
+  const keyToken = modelText.match(/__MASKED_TOKEN_[A-F0-9]+__/)[0];
 
-  assert.equal(vaultData[uriToken], "SecretPass999!");
-  assert.equal(vaultData[keyToken], rawApiKey);
+  assert.equal(await vault.unmaskText(uriToken, sessionID), "SecretPass999!");
+  assert.equal(await vault.unmaskText(keyToken, sessionID), rawApiKey);
 
-  // 5. Model responds referencing the masked tokens
+  // 5. Model responses stay redacted. Plaintext is only returned to the local
+  // reveal controller after its confirmation step.
   const modelAssistantOutput = {
     text: `Connected successfully to database using credentials ${keyToken}.`
   };
-
-  // Model response restoration hook
-  await hooks["experimental.text.complete"]({ sessionID }, modelAssistantOutput);
-
-  // 6. User/terminal sees original sensitive values restored
-  assert.ok(!modelAssistantOutput.text.includes(keyToken));
-  assert.ok(modelAssistantOutput.text.includes(rawApiKey));
+  assert.ok(modelAssistantOutput.text.includes(keyToken));
+  const revealed = await vault.rawBrokerRequest({
+    operation: "reveal",
+    session: sessionID,
+    tokens: [keyToken],
+  });
+  assert.equal(revealed.mappings[keyToken], rawApiKey);
 
   // 7. Model issues a tool call referencing the masked token
   const toolExecution = {

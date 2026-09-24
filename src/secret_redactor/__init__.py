@@ -3,8 +3,8 @@ from .vault import (
     unmask_text,
     mask_recursive,
     unmask_recursive,
-    load_vault,
-    save_vault,
+    clear_session,
+    broker_stats,
     SECRET_PATTERNS,
 )
 
@@ -13,7 +13,7 @@ __all__ = [
     "unmask_text",
     "mask_recursive",
     "unmask_recursive",
-    "load_vault",
-    "save_vault",
+    "clear_session",
+    "broker_stats",
     "SECRET_PATTERNS",
 ]

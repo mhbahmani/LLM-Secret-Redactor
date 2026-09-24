@@ -3,5 +3,10 @@
   "version": "1.0.0",
   "description": "Zero-leak secret redactor plugin for OpenCode",
   "main": "plugin.mjs",
-  "type": "commonjs"
+  "type": "commonjs",
+  "exports": {
+    ".": "./plugin-v2.mjs",
+    "./server": "./plugin-v2.mjs",
+    "./tui": "./tui.mjs"
+  }
 }

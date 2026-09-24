@@ -1,285 +1,189 @@
 const fs = require("node:fs");
+const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
-const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 
-const DEFAULT_PATTERNS = [
-  { name: "Anthropic key", pattern: "sk-ant-[a-zA-Z0-9_\\-]{20,}", kind: "TOKEN" },
-  { name: "OpenAI key", pattern: "sk-[a-zA-Z0-9_\\-]{20,}", kind: "TOKEN" },
-  { name: "GitHub Token", pattern: "gh[pousr]_[a-zA-Z0-9]{36,}", kind: "TOKEN" },
-  { name: "AWS Access Key ID", pattern: "(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", kind: "AWS_KEY" },
-  { name: "Generic bearer token", pattern: "bearer\\s+([a-zA-Z0-9_\\-.]{20,})", flags: "i", kind: "BEARER_TOKEN" },
-  { name: "URI with credentials", pattern: "([a-z0-9+.\\-]+://[^:\\s@/]+:)([^@\\s/]+)(@)", flags: "i", kind: "URI_PASS" },
-  { name: "Key-value secrets", pattern: "([\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\"']?\\s*[:=]\\s*[\"']?)([^\\s\"',;}{]{6,})([\"']?)", flags: "i", kind: "KV_SECRET" },
-  { name: "JWT token pattern", pattern: "eyJ[a-zA-Z0-9_\\-]{10,}\\.eyJ[a-zA-Z0-9_\\-]{10,}\\.[a-zA-Z0-9_\\-]{10,}", kind: "JWT_TOKEN" }
-];
+const BROKER_SCRIPT = path.join(__dirname, "broker.py");
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+let startPromise = null;
 
-const VAULT_DIR = process.env.VAULT_DIR || "/tmp/claude_secret_vault";
-
-function loadPatterns() {
-  const candidates = [
-    path.join(__dirname, "patterns.json"),
-    path.join(__dirname, "..", "patterns.json"),
-    path.join(process.cwd(), "patterns.json"),
-  ];
-
-  let rawPatterns = null;
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      try {
-        const content = fs.readFileSync(candidate, "utf-8");
-        rawPatterns = JSON.parse(content);
-        break;
-      } catch {
-        // Ignore read/parse error and try next
-      }
-    }
+function getRuntimeDir() {
+  if (process.env.SECRET_REDACTOR_RUNTIME_DIR) {
+    return path.resolve(process.env.SECRET_REDACTOR_RUNTIME_DIR);
   }
-
-  return rawPatterns || DEFAULT_PATTERNS;
+  if (process.env.XDG_RUNTIME_DIR) {
+    return path.join(process.env.XDG_RUNTIME_DIR, "llm-secret-redactor");
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+  return path.join(os.tmpdir(), `llm-secret-redactor-${uid}`);
 }
 
-function getCompiledPatterns() {
-  const raw = loadPatterns();
-  return raw.map((item) => {
-    let flags = "g";
-    if (item.flags && item.flags.includes("i")) {
-      flags += "i";
-    }
-    return {
-      regex: new RegExp(item.pattern, flags),
-      kind: item.kind,
-      name: item.name
+function getSocketPath() {
+  return path.join(getRuntimeDir(), "broker.sock");
+}
+
+function ensureRuntimeDir() {
+  const directory = getRuntimeDir();
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const info = fs.lstatSync(directory);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`Unsafe broker runtime directory: ${directory}`);
+  }
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error(`Broker runtime directory is not owned by the current user: ${directory}`);
+  }
+  fs.chmodSync(directory, 0o700);
+}
+
+function sendRequest(request) {
+  return new Promise((resolve, reject) => {
+    const client = net.createConnection(getSocketPath());
+    let response = "";
+    let settled = false;
+
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      if (error) reject(error);
+      else resolve(value);
     };
+
+    client.setTimeout(3000, () => finish(new Error("Secret broker request timed out")));
+    client.on("error", (error) => finish(error));
+    client.on("connect", () => {
+      client.write(`${JSON.stringify(request)}\n`);
+    });
+    client.on("data", (chunk) => {
+      response += chunk.toString("utf-8");
+      if (Buffer.byteLength(response) > MAX_RESPONSE_BYTES) {
+        finish(new Error("Secret broker response exceeded size limit"));
+        return;
+      }
+      const newline = response.indexOf("\n");
+      if (newline === -1) return;
+      try {
+        const parsed = JSON.parse(response.slice(0, newline));
+        if (!parsed.ok) {
+          finish(new Error(parsed.error || "Secret broker request failed"));
+        } else {
+          finish(null, parsed);
+        }
+      } catch (error) {
+        finish(error);
+      }
+    });
+    client.on("end", () => {
+      if (!settled) finish(new Error("Secret broker returned an empty response"));
+    });
   });
 }
 
-function getVaultPath(sessionID) {
-  fs.mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(VAULT_DIR, 0o700);
-  const safeSession = String(sessionID || "default").replace(/[^a-zA-Z0-9_\-]/g, "_");
-  return path.join(VAULT_DIR, `vault_${safeSession}.json`);
-}
-
-function loadVault(sessionID) {
-  const vaultPath = getVaultPath(sessionID);
-  if (!fs.existsSync(vaultPath)) {
-    return {};
-  }
-  try {
-    const data = fs.readFileSync(vaultPath, "utf-8");
-    const parsed = JSON.parse(data);
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-      throw new Error("vault must contain a JSON object");
+async function startBroker() {
+  if (startPromise) return startPromise;
+  startPromise = (async () => {
+    if (!fs.existsSync(BROKER_SCRIPT)) {
+      throw new Error(`Secret broker executable is missing: ${BROKER_SCRIPT}`);
     }
-    return parsed;
-  } catch (error) {
-    throw new Error(`Unable to read secret vault ${vaultPath}: ${error.message}`);
-  }
-}
-
-function saveVault(sessionID, vault) {
-  const vaultPath = getVaultPath(sessionID);
-  const tempPath = `${vaultPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
-  try {
-    fs.writeFileSync(tempPath, JSON.stringify(vault, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx"
+    ensureRuntimeDir();
+    const python = process.env.SECRET_REDACTOR_PYTHON || "python3";
+    const child = spawn(python, [BROKER_SCRIPT, "--serve"], {
+      detached: true,
+      stdio: "ignore",
     });
-    fs.renameSync(tempPath, vaultPath);
-    fs.chmodSync(vaultPath, 0o600);
+    child.unref();
+
+    const deadline = Date.now() + 3000;
+    let lastError;
+    while (Date.now() < deadline) {
+      try {
+        await sendRequest({ operation: "ping" });
+        return;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    throw new Error(`Secret broker did not start: ${lastError?.message || "unknown error"}`);
+  })();
+  try {
+    await startPromise;
+  } finally {
+    startPromise = null;
+  }
+}
+
+async function brokerRequest(operation, sessionID = "default", value) {
+  const request = { operation, session: sessionID || "default" };
+  if (value !== undefined) request.value = value;
+  try {
+    return await sendRequest(request);
   } catch (error) {
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      // The temporary file may not have been created.
-    }
-    throw new Error(`Unable to persist secret vault ${vaultPath}: ${error.message}`);
+    if (!["ENOENT", "ECONNREFUSED", "ECONNRESET"].includes(error.code)) throw error;
+    await startBroker();
+    return sendRequest(request);
   }
 }
 
-function makeToken(prefix, secret) {
-  const digest = crypto
-    .createHash("sha256")
-    .update(secret, "utf-8")
-    .digest("hex")
-    .slice(0, 8)
-    .toUpperCase();
-  return `__MASKED_${prefix}_${digest}__`;
+async function rawBrokerRequest(request) {
+  try {
+    return await sendRequest(request);
+  } catch (error) {
+    if (!["ENOENT", "ECONNREFUSED", "ECONNRESET"].includes(error.code)) throw error;
+    await startBroker();
+    return sendRequest(request);
+  }
 }
 
-function tokenForSecret(prefix, secret, vault) {
-  const digest = crypto.createHash("sha256").update(secret, "utf-8").digest("hex").toUpperCase();
-  for (let length = 8; length <= digest.length; length += 4) {
-    const token = `__MASKED_${prefix}_${digest.slice(0, length)}__`;
-    if (vault[token] === undefined || vault[token] === secret) {
-      return token;
-    }
-  }
-  throw new Error("Unable to generate a collision-free mask token");
+async function maskText(text, sessionID) {
+  if (typeof text !== "string" || !text) return [text, {}];
+  const response = await brokerRequest("mask", sessionID, text);
+  return [response.value, response.mappings || {}];
 }
 
-function maskText(text, sessionID) {
-  if (typeof text !== "string" || !text) {
-    return [text, {}];
-  }
-
-  const vault = loadVault(sessionID);
-  let updated = false;
-  let result = text;
-
-  const patterns = getCompiledPatterns();
-
-  for (const { regex, kind } of patterns) {
-    if (kind === "KV_SECRET") {
-      result = result.replace(regex, (match, prefix, secret, suffix) => {
-        if (secret.startsWith("__MASKED_") && secret.endsWith("__")) {
-          return match;
-        }
-        const token = tokenForSecret("SECRET", secret, vault);
-        if (vault[token] !== secret) {
-          vault[token] = secret;
-          updated = true;
-        }
-        return `${prefix}${token}${suffix}`;
-      });
-    } else if (kind === "URI_PASS") {
-      result = result.replace(regex, (match, prefix, secret, suffix) => {
-        const token = tokenForSecret("URIPASS", secret, vault);
-        if (vault[token] !== secret) {
-          vault[token] = secret;
-          updated = true;
-        }
-        return `${prefix}${token}${suffix}`;
-      });
-    } else if (kind === "BEARER_TOKEN") {
-      result = result.replace(regex, (match, secret) => {
-        const token = tokenForSecret("BEARER", secret, vault);
-        if (vault[token] !== secret) {
-          vault[token] = secret;
-          updated = true;
-        }
-        return `Bearer ${token}`;
-      });
-    } else {
-      result = result.replace(regex, (secret) => {
-        if (secret.startsWith("__MASKED_") && secret.endsWith("__")) {
-          return secret;
-        }
-        const token = tokenForSecret(kind, secret, vault);
-        if (vault[token] !== secret) {
-          vault[token] = secret;
-          updated = true;
-        }
-        return token;
-      });
-    }
-  }
-
-  if (updated) {
-    saveVault(sessionID, vault);
-  }
-
-  return [result, vault];
+async function unmaskText(text, sessionID) {
+  if (typeof text !== "string" || !text) return text;
+  const response = await brokerRequest("unmask", sessionID, text);
+  return response.value;
 }
 
-function unmaskText(text, sessionID) {
-  if (typeof text !== "string" || !text) {
-    return text;
-  }
-
-  const vault = loadVault(sessionID);
-  const tokens = Object.keys(vault);
-  if (tokens.length === 0) {
-    return text;
-  }
-
-  // Sort tokens longest first to avoid partial collision
-  const sortedTokens = Object.entries(vault).sort(
-    ([a], [b]) => b.length - a.length
-  );
-
-  let result = text;
-  for (const [token, secret] of sortedTokens) {
-    if (result.includes(token)) {
-      result = result.split(token).join(secret);
-    }
-  }
-
-  return result;
+async function maskRecursive(value, sessionID) {
+  const response = await brokerRequest("mask", sessionID, value);
+  return [response.value, Boolean(response.changed)];
 }
 
-function maskRecursive(obj, sessionID) {
-  if (typeof obj === "string") {
-    const [masked] = maskText(obj, sessionID);
-    return [masked, masked !== obj];
-  }
-
-  if (obj === null || typeof obj !== "object") {
-    return [obj, false];
-  }
-
-  if (Array.isArray(obj)) {
-    let changed = false;
-    const newArr = [];
-    for (const item of obj) {
-      const [newItem, ch] = maskRecursive(item, sessionID);
-      newArr.push(newItem);
-      if (ch) changed = true;
-    }
-    return [newArr, changed];
-  }
-
-  let changed = false;
-  const newObj = {};
-  for (const [k, v] of Object.entries(obj)) {
-    const [newV, ch] = maskRecursive(v, sessionID);
-    newObj[k] = newV;
-    if (ch) changed = true;
-  }
-  return [newObj, changed];
+async function unmaskRecursive(value, sessionID) {
+  const response = await brokerRequest("unmask", sessionID, value);
+  return [response.value, Boolean(response.changed)];
 }
 
-function unmaskRecursive(obj, sessionID) {
-  if (typeof obj === "string") {
-    const unmasked = unmaskText(obj, sessionID);
-    return [unmasked, unmasked !== obj];
-  }
+async function clearSession(sessionID) {
+  return brokerRequest("clear", sessionID);
+}
 
-  if (obj === null || typeof obj !== "object") {
-    return [obj, false];
-  }
+async function brokerStats() {
+  return brokerRequest("stats");
+}
 
-  if (Array.isArray(obj)) {
-    let changed = false;
-    const newArr = [];
-    for (const item of obj) {
-      const [newItem, ch] = unmaskRecursive(item, sessionID);
-      newArr.push(newItem);
-      if (ch) changed = true;
-    }
-    return [newArr, changed];
+async function shutdownBroker() {
+  try {
+    return await sendRequest({ operation: "shutdown" });
+  } catch {
+    return { ok: true };
   }
-
-  let changed = false;
-  const newObj = {};
-  for (const [k, v] of Object.entries(obj)) {
-    const [newV, ch] = unmaskRecursive(v, sessionID);
-    newObj[k] = newV;
-    if (ch) changed = true;
-  }
-  return [newObj, changed];
 }
 
 module.exports = {
-  VAULT_DIR,
-  loadPatterns,
-  getVaultPath,
-  loadVault,
-  saveVault,
-  makeToken,
+  getRuntimeDir,
+  getSocketPath,
+  brokerRequest,
+  rawBrokerRequest,
   maskText,
   unmaskText,
   maskRecursive,
-  unmaskRecursive
+  unmaskRecursive,
+  clearSession,
+  brokerStats,
+  shutdownBroker,
 };
