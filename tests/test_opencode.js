@@ -8,11 +8,11 @@ const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-ope
 process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 process.env.SECRET_REDACTOR_BROKER_IDLE = "10";
 
-let vault, plugin, createV1Hooks;
+let vault, plugin, createHooks;
 test.before(async () => {
   vault = await import("../src/secret_redactor/vault.mjs");
-  ({ default: plugin } = await import("../src/secret_redactor/opencode/index.mjs"));
-  ({ createV1Hooks } = await import("../src/secret_redactor/opencode/v1.mjs"));
+  ({ default: plugin } = await import("../src/secret_redactor/opencode/plugin.mjs"));
+  ({ createHooks } = await import("../src/secret_redactor/opencode/hooks.mjs"));
 });
 
 test.after(async () => {
@@ -22,7 +22,7 @@ test.after(async () => {
 
 test("Outbound message masking: original -> mask before model request", async () => {
   const sessionID = "test-outbound";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   const originalText = "Connecting with key sk-proj-1234567890abcdef1234567890 to backend.";
   const messages = [
@@ -42,7 +42,7 @@ test("Outbound message masking: original -> mask before model request", async ()
 
 test("File and tool-result masking in model context", async () => {
   const sessionID = "test-tool-result";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   const secretUri = "postgres://admin:SuperSecretPass123!@localhost:5432/mydb";
   const secretGh = "ghp_123456789012345678901234567890123456";
@@ -75,7 +75,7 @@ test("File and tool-result masking in model context", async () => {
 
 test("User content in model context vs canonical input", async () => {
   const sessionID = "test-user-context";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   // Canonical user input retained locally
   const canonicalUserInput = "Database credentials: password='SuperSecretPassword123'";
@@ -98,7 +98,7 @@ test("User content in model context vs canonical input", async () => {
 
 test("Multiple patterns in a single request", async () => {
   const sessionID = "test-multi-patterns";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   const multiText = [
     "OpenAI: sk-proj-1234567890abcdef1234567890",
@@ -131,7 +131,7 @@ test("Multiple patterns in a single request", async () => {
 
 test("Repeated values receive deterministic identical mask token", async () => {
   const sessionID = "test-repeated";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   const text = "First: sk-proj-1234567890abcdef1234567890 and Second: sk-proj-1234567890abcdef1234567890";
   const messages = [
@@ -150,7 +150,7 @@ test("Repeated values receive deterministic identical mask token", async () => {
 });
 
 test("Assistant responses remain redacted until explicit local reveal", async () => {
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
   assert.equal(hooks["experimental.text.complete"], undefined);
 });
 
@@ -206,7 +206,7 @@ test("Concurrent OS processes converge on one cold-start broker", async () => {
 
 test("Tool argument restoration before local execution", async () => {
   const sessionID = "test-tool-arg";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   // Populate vault
   const [_, v] = await vault.maskText("token ghp_123456789012345678901234567890123456", sessionID);
@@ -226,7 +226,7 @@ test("Tool argument restoration before local execution", async () => {
 
 test("Nested tool arguments (objects and arrays) restoration", async () => {
   const sessionID = "test-nested-args";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   const [, v1] = await vault.maskText("url postgres://admin:Pass123!@localhost/db", sessionID);
   const token1 = Object.keys(v1).find(k => k.includes("URIPASS"));
@@ -258,7 +258,7 @@ test("Nested tool arguments (objects and arrays) restoration", async () => {
 test("Session isolation: sessions do not cross-unmask tokens", async () => {
   const sessionA = "test-session-a";
   const sessionB = "test-session-b";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   // Secret in session A
   const [_, vaultA] = await vault.maskText("key sk-proj-1111111111111111111111111111", sessionA);
@@ -275,66 +275,9 @@ test("Session isolation: sessions do not cross-unmask tokens", async () => {
   assert.equal(toolInputB.args.key, tokenA);
 });
 
-test("OpenCode V2 hook registration and execution", async () => {
-  const sessionID = "test-v2";
-  const sessionHooks = {};
-  const toolHooks = {};
-
-  const mockCtx = {
-    sessionID,
-    session: {
-      hook: (name, fn) => { sessionHooks[name] = fn; }
-    },
-    tool: {
-      hook: (name, fn) => { toolHooks[name] = fn; }
-    },
-    event: {
-      subscribe: () => {}
-    }
-  };
-
-  await plugin(mockCtx);
-
-  assert.ok(typeof sessionHooks["context"] === "function");
-  assert.ok(typeof sessionHooks["prompt"] === "function");
-  assert.ok(typeof sessionHooks["compaction"] === "function");
-  assert.ok(typeof sessionHooks["generate"] === "function");
-  assert.ok(typeof sessionHooks["title"] === "function");
-  assert.ok(typeof toolHooks["execute.before"] === "function");
-  assert.ok(typeof toolHooks["execute.after"] === "function");
-
-  // Test V2 context masking
-  const v2Event = {
-    sessionID,
-    messages: [
-      {
-        role: "user",
-        content: "API_KEY=sk-proj-1234567890abcdef1234567890"
-      }
-    ]
-  };
-
-  await sessionHooks["context"](v2Event);
-  assert.ok(!v2Event.messages[0].content.includes("sk-proj-1234567890abcdef1234567890"));
-  assert.ok(v2Event.messages[0].content.includes("__MASKED_TOKEN_"));
-
-  // Test V2 tool argument unmasking
-  const token = v2Event.messages[0].content.match(/__MASKED_[A-Z_0-9]+__/)[0];
-  const toolEvent = {
-    sessionID,
-    args: { key: token }
-  };
-  await toolHooks["execute.before"](toolEvent);
-  assert.equal(toolEvent.args.key, "sk-proj-1234567890abcdef1234567890");
-
-  const toolResult = { sessionID, output: "token ghp_123456789012345678901234567890123456" };
-  await toolHooks["execute.after"](toolResult);
-  assert.ok(!toolResult.output.includes("ghp_123456789012345678901234567890123456"));
-});
-
-test("V1 canonical messages are always masked and never auto-revealed", async () => {
+test("Canonical messages are always masked and never auto-revealed", async () => {
   const sessionID = "test-secure-ui";
-  const hooks = createV1Hooks(false);
+  const hooks = createHooks();
 
   assert.equal(typeof hooks["chat.message"], "function");
   assert.equal(hooks["experimental.text.complete"], undefined);

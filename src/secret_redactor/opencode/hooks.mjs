@@ -1,7 +1,7 @@
 import { unmaskRecursive, maskText, maskRecursive } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
-function createV1Hooks() {
+function createHooks() {
   const hooks = {
     "chat.message": async (input, output) => {
       const sessionID = input?.sessionID || "default";
@@ -63,5 +63,5 @@ function createV1Hooks() {
 }
 
 export {
-  createV1Hooks
+  createHooks
 };

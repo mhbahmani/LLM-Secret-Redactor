@@ -30,11 +30,8 @@ OPENCODE_FILES = [
     ("vault.mjs", "vault.mjs"),
     ("patterns.json", "patterns.json"),
     ("opencode/transformer.mjs", "transformer.mjs"),
-    ("opencode/v1.mjs", "v1.mjs"),
-    ("opencode/v2.mjs", "v2.mjs"),
-    ("opencode/index.mjs", "index.mjs"),
+    ("opencode/hooks.mjs", "hooks.mjs"),
     ("opencode/plugin.mjs", "plugin.mjs"),
-    ("opencode/plugin-v2.mjs", "plugin-v2.mjs"),
     ("opencode/tui.mjs", "tui.mjs"),
     ("opencode/ui-reveal.mjs", "ui-reveal.mjs"),
     ("opencode/package.json", "package.json")

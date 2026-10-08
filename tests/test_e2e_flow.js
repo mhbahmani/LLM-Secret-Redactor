@@ -9,7 +9,7 @@ process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 
 let plugin, vault;
 test.before(async () => {
-  ({ default: plugin } = await import("../src/secret_redactor/opencode/index.mjs"));
+  ({ default: plugin } = await import("../src/secret_redactor/opencode/plugin.mjs"));
   vault = await import("../src/secret_redactor/vault.mjs");
 });
 
@@ -20,7 +20,7 @@ test.after(async () => {
 
 test("End-to-end lifecycle flow for OpenCode", async () => {
   const sessionID = "test-e2e-session";
-  const hooks = await plugin({});
+  const hooks = await plugin.server({});
 
   // 1. User/file/tool contains sensitive value
   const sensitiveHost = "postgres://user:SecretPass999!@private-test-host.internal.example:5432/db";
