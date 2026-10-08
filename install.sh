@@ -13,7 +13,9 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/install.py" ]; then
     exec "$PYTHON_CMD" "$SCRIPT_DIR/install.py" "$@"
 fi
 
-INSTALLER_URL="${INSTALLER_URL:-https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master/install.py}"
+# Set SECRET_REDACTOR_REF to a release tag to install a pinned version.
+export SECRET_REDACTOR_REF="${SECRET_REDACTOR_REF:-master}"
+INSTALLER_URL="${INSTALLER_URL:-https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/${SECRET_REDACTOR_REF}/install.py}"
 TEMP_SCRIPT="$(mktemp /tmp/secret_redactor_install.XXXXXX.py)"
 trap 'rm -f "$TEMP_SCRIPT"' EXIT
 

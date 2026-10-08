@@ -102,11 +102,11 @@ class OpenCodeInstallerTests(unittest.TestCase):
     def test_parse_args_accepts_flags_or_command(self):
         self.assertEqual(
             install.parse_args(["--install", "--opencode", "--local", "--reveal-keybind=ctrl+k"]),
-            ("install", "local", "opencode", "ctrl+k"),
+            ("install", "local", "opencode", "ctrl+k", None),
         )
         self.assertEqual(
-            install.parse_args(["uninstall", "--client=CLAUDE", "--scope", "global"]),
-            ("uninstall", "global", "claude", None),
+            install.parse_args(["uninstall", "--client=CLAUDE", "--scope", "global", "--ref", "v1.2.0"]),
+            ("uninstall", "global", "claude", None, "v1.2.0"),
         )
 
 

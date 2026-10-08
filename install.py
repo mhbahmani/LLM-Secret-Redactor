@@ -40,9 +40,10 @@ OPENCODE_FILES = [
     ("opencode/package.json", "package.json")
 ]
 
+REPO_RAW_BASE = "https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor"
 REPO_RAW_URL = os.environ.get(
     "REPO_RAW_URL",
-    "https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master"
+    f"{REPO_RAW_BASE}/{os.environ.get('SECRET_REDACTOR_REF', 'master')}"
 )
 
 def prompt_menu(title, options):
@@ -506,11 +507,15 @@ def parse_args(argv=None):
     client.add_argument("--opencode", dest="client", action="store_const", const="opencode")
     client.add_argument("--client", choices=["all", "claude", "opencode"], type=str.lower)
     parser.add_argument("--reveal-keybind", help=f"OpenCode reveal shortcut (default {DEFAULT_REVEAL_KEYBIND})")
+    parser.add_argument("--ref", help="git tag or commit to download files from (default: master)")
     args = parser.parse_args(argv)
-    return args.action or args.command, args.scope, args.client, args.reveal_keybind
+    return args.action or args.command, args.scope, args.client, args.reveal_keybind, args.ref
 
 def main():
-    cli_action, cli_scope, cli_client, cli_reveal_keybind = parse_args()
+    global REPO_RAW_URL
+    cli_action, cli_scope, cli_client, cli_reveal_keybind, cli_ref = parse_args()
+    if cli_ref:
+        REPO_RAW_URL = f"{REPO_RAW_BASE}/{cli_ref}"
 
     print("==========================================")
     print("      LLM Secret Redactor Installer       ")
