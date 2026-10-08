@@ -69,8 +69,8 @@ def _start_broker():
     raise RuntimeError(f"Secret broker did not start: {last_error}")
 
 
-def broker_request(operation: str, session_id: Optional[str] = None, value: Any = None) -> Dict[str, Any]:
-    request = {"operation": operation}
+def broker_request(operation: str, session_id: Optional[str] = None, value: Any = None, **fields: Any) -> Dict[str, Any]:
+    request = {"operation": operation, **fields}
     if session_id is not None:
         request["session"] = session_id
     if value is not None:
@@ -105,9 +105,10 @@ def unmask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
     return response["value"], bool(response.get("changed"))
 
 
-def restore_tool_input(tool_input: Any, session_id: str) -> Dict[str, Any]:
-    """Unmask tool input; the response lists tokens the session cannot resolve."""
-    return broker_request("unmask", session_id, tool_input)
+def restore_tool_input(tool_input: Any, session_id: str, tool: str) -> Dict[str, Any]:
+    """Unmask tool input. The response lists tokens the session cannot resolve
+    and the restore policy decision for the tool."""
+    return broker_request("unmask", session_id, tool_input, tool=tool)
 
 
 def clear_session(session_id: str):

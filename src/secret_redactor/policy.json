@@ -1,0 +1,24 @@
+{
+  "default": "ask",
+  "tools": {
+    "Read": "allow",
+    "Write": "allow",
+    "Edit": "allow",
+    "MultiEdit": "allow",
+    "NotebookEdit": "allow",
+    "Glob": "allow",
+    "Grep": "allow",
+    "WebFetch": "deny",
+    "WebSearch": "deny",
+    "read": "allow",
+    "write": "allow",
+    "edit": "allow",
+    "multiedit": "allow",
+    "patch": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "webfetch": "deny",
+    "websearch": "deny"
+  }
+}

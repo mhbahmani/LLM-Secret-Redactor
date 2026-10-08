@@ -51,6 +51,29 @@ def ensure_runtime_dir():
 
 
 PATTERNS = load_patterns()
+DECISIONS = {"allow", "ask", "deny"}
+
+
+def load_policy(path=None):
+    """Per-tool decision for running a tool with restored secret values."""
+    path = path or os.environ.get("SECRET_REDACTOR_POLICY") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "policy.json"
+    )
+    policy = {"default": "ask", "tools": {}}
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as handle:
+            policy.update(json.load(handle))
+    values = [policy["default"], *policy["tools"].values()]
+    if any(value not in DECISIONS for value in values):
+        raise ValueError(f"Restore policy values must be one of {sorted(DECISIONS)}: {path}")
+    return policy
+
+
+def restore_decision(policy, tool):
+    return policy["tools"].get(tool, policy["default"])
+
+
+POLICY = load_policy()
 
 
 class SessionVault:
@@ -196,6 +219,7 @@ def handle_request(request):
                 "value": transformed,
                 "changed": transformed != original,
                 "unresolved": sorted(unresolved),
+                "decision": restore_decision(POLICY, request.get("tool")),
             }
     raise ValueError(f"Unsupported broker operation: {operation}")
 

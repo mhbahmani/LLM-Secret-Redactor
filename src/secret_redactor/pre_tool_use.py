@@ -19,6 +19,23 @@ def decision(permission, reason, updated_input=None):
     return {"hookSpecificOutput": output}
 
 
+def restore_output(tool_name, response):
+    policy = response.get("decision", "ask")
+    if policy == "deny":
+        return decision(
+            "deny",
+            f"secret-redactor: {tool_name} may not receive real secret values. "
+            "Change the restore policy to allow it.",
+        )
+    if policy == "ask":
+        return decision(
+            "ask",
+            f"secret-redactor: {tool_name} will run with real secret values in place of masked tokens.",
+            response["value"],
+        )
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": response["value"]}}
+
+
 def main():
     raw_input = None
     try:
@@ -33,7 +50,8 @@ def main():
         if tool_input is None:
             sys.exit(0)
 
-        response = restore_tool_input(tool_input, session_id)
+        tool_name = data.get("tool_name", "")
+        response = restore_tool_input(tool_input, session_id, tool_name)
         unresolved = response.get("unresolved", [])
 
         if unresolved:
@@ -46,12 +64,7 @@ def main():
                 "Re-read the source to get fresh values.",
             )))
         elif response.get("changed"):
-            print(json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "updatedInput": response["value"],
-                }
-            }))
+            print(json.dumps(restore_output(tool_name, response)))
         else:
             print(json.dumps({}))
 

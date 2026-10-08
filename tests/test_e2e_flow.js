@@ -84,7 +84,7 @@ test("End-to-end lifecycle flow for OpenCode", async () => {
   };
 
   // Pre-tool execution hook
-  await hooks["tool.execute.before"]({ tool: "fetch", sessionID, callID: "call-99" }, toolExecution);
+  await hooks["tool.execute.before"]({ tool: "write", sessionID, callID: "call-99" }, toolExecution);
 
   // 8. Actual local tool argument receives restored original values
   assert.equal(toolExecution.args.url, "http://SecretPass999!/health");

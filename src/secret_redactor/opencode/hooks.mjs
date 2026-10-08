@@ -1,4 +1,4 @@
-import { brokerRequest, maskText, maskRecursive, clearSession } from "./vault.mjs";
+import { rawBrokerRequest, maskText, maskRecursive, clearSession } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
 function requireSession(input) {
@@ -34,7 +34,12 @@ function createHooks() {
     "tool.execute.before": async (input, output) => {
       const sessionID = requireSession(input);
       if (!output || output.args === undefined) return;
-      const response = await brokerRequest("unmask", sessionID, output.args);
+      const response = await rawBrokerRequest({
+        operation: "unmask",
+        session: sessionID,
+        value: output.args,
+        tool: input.tool,
+      });
       if (response.unresolved?.length) {
         // Running the tool would write literal mask tokens to disk or send
         // them to a service, e.g. tokens from an expired or other session.
@@ -44,9 +49,15 @@ function createHooks() {
           "Re-read the source to get fresh values.",
         );
       }
-      if (response.changed) {
-        output.args = response.value;
+      if (!response.changed) return;
+      // OpenCode server hooks cannot prompt, so "ask" refuses like "deny".
+      if (response.decision !== "allow") {
+        throw new Error(
+          `secret-redactor: ${input.tool} may not receive real secret values. ` +
+          "Set it to \"allow\" in the restore policy to permit this.",
+        );
       }
+      output.args = response.value;
     },
 
     "tool.execute.after": async (input, output) => {

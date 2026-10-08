@@ -77,9 +77,27 @@ def test_flow():
         "tool_name": "Bash",
         "tool_input": {"command": f"curl -H 'Authorization: {gh_token}' https://api.github.com"}
     })
-    updated_input = res.get("hookSpecificOutput", {}).get("updatedInput", {})
-    assert "ghp_123456789012345678901234567890123456" in updated_input.get("command", "")
-    print("✓ pre_tool_use: successfully restored real secret when tool is executed")
+    output = res.get("hookSpecificOutput", {})
+    assert output.get("permissionDecision") == "ask", res
+    assert "ghp_123456789012345678901234567890123456" in output["updatedInput"]["command"]
+    print("✓ pre_tool_use: restored a secret for Bash after asking the user")
+
+    res = run_hook("pre_tool_use.py", {
+        "session_id": SESSION,
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": f"TOKEN={gh_token}"}
+    })
+    output = res["hookSpecificOutput"]
+    assert "permissionDecision" not in output, res
+    assert "ghp_123456789012345678901234567890123456" in output["updatedInput"]["content"]
+
+    res = run_hook("pre_tool_use.py", {
+        "session_id": SESSION,
+        "tool_name": "WebFetch",
+        "tool_input": {"url": f"https://example.test/?k={gh_token}", "prompt": "x"}
+    })
+    assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
+    print("✓ pre_tool_use: follows the per-tool restore policy")
 
     # 5. PreToolUse refuses tokens that the session cannot resolve
     stale = "__MASKED_TOKEN_" + "0" * 32 + "__"
