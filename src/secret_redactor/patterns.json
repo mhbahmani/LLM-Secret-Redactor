@@ -27,13 +27,13 @@
   },
   {
     "name": "URI with credentials",
-    "pattern": "([a-z0-9+.\\-]+://[^:\\s@/]+:)([^@\\s/]+)(@)",
+    "pattern": "([a-z0-9+.\\-]+://[^:\\s@/\\\\\\[\\](){}<>\"'$]+:)([^@\\s/\\\\\\[\\](){}<>\"'$]+)(@)",
     "flags": "i",
     "kind": "URI_PASS"
   },
   {
     "name": "Key-value secrets",
-    "pattern": "([\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\"']?\\s*[:=]\\s*[\"']?)([^\\s\"',;}{]{6,})([\"']?)",
+    "pattern": "([\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\"']?\\s*[:=]\\s*[\"']?)([^\\s\"',;{}()<>\\[\\]]{6,})(?![\\w.(\\[])([\"']?)",
     "flags": "i",
     "kind": "KV_SECRET"
   },

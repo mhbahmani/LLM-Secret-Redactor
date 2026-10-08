@@ -8,6 +8,16 @@ import re
 PATTERN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "patterns.json")
 TOKEN_RE = re.compile(r"__MASKED_[A-Z_]+?_[0-9A-F]{8,}__")
 
+# Values that name a secret rather than contain one: dotted attribute
+# lookups (settings.API_KEY), env references ($TOKEN, ${TOKEN}, %TOKEN%),
+# and literal keywords.
+REFERENCE_RE = re.compile(
+    r"[A-Za-z_]+(?:\.[A-Za-z_]+)+"
+    r"|\$\{?[A-Za-z_]\w*\}?"
+    r"|%[A-Za-z_]\w*%"
+    r"|(?i:null|none|undefined|true|false)"
+)
+
 # Token kinds are shorter than pattern kinds for the composite patterns.
 TOKEN_KINDS = {
     "KV_SECRET": "SECRET",
@@ -43,7 +53,7 @@ def redact(text, patterns, replace):
 
         def substitute(match, group=group, token_kind=token_kind):
             secret = match.group(group)
-            if not secret or TOKEN_RE.fullmatch(secret):
+            if not secret or TOKEN_RE.fullmatch(secret) or REFERENCE_RE.fullmatch(secret):
                 return match.group(0)
             whole = match.group(0)
             start = match.start(group) - match.start()
