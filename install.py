@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import sys
 import os
 import re
@@ -488,41 +489,29 @@ def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DE
 
 # --- Main Entry ---
 
-def parse_args():
-    action = None
-    if "--uninstall" in sys.argv or "uninstall" in sys.argv:
-        action = "uninstall"
-    elif "--install" in sys.argv or "install" in sys.argv:
-        action = "install"
-
-    scope = None
-    if "--global" in sys.argv:
-        scope = "global"
-    elif "--local" in sys.argv:
-        scope = "local"
-    for arg in sys.argv:
-        if arg.startswith("--scope="):
-            scope = arg.split("=", 1)[1].lower()
-
-    client = None
-    if "--all" in sys.argv:
-        client = "all"
-    elif "--claude" in sys.argv:
-        client = "claude"
-    elif "--opencode" in sys.argv:
-        client = "opencode"
-    for arg in sys.argv:
-        if arg.startswith("--client="):
-            client = arg.split("=", 1)[1].lower()
-
-    reveal_keybind = None
-    for arg in sys.argv:
-        if arg.startswith("--reveal-keybind="):
-            reveal_keybind = arg.split("=", 1)[1]
-
-    return action, scope, client, reveal_keybind
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Install or remove LLM Secret Redactor.")
+    parser.add_argument("command", nargs="?", choices=["install", "uninstall"],
+                        help="same as --install / --uninstall")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--install", dest="action", action="store_const", const="install")
+    action.add_argument("--uninstall", dest="action", action="store_const", const="uninstall")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--global", dest="scope", action="store_const", const="global")
+    scope.add_argument("--local", dest="scope", action="store_const", const="local")
+    scope.add_argument("--scope", choices=["global", "local"], type=str.lower)
+    client = parser.add_mutually_exclusive_group()
+    client.add_argument("--all", dest="client", action="store_const", const="all")
+    client.add_argument("--claude", dest="client", action="store_const", const="claude")
+    client.add_argument("--opencode", dest="client", action="store_const", const="opencode")
+    client.add_argument("--client", choices=["all", "claude", "opencode"], type=str.lower)
+    parser.add_argument("--reveal-keybind", help=f"OpenCode reveal shortcut (default {DEFAULT_REVEAL_KEYBIND})")
+    args = parser.parse_args(argv)
+    return args.action or args.command, args.scope, args.client, args.reveal_keybind
 
 def main():
+    cli_action, cli_scope, cli_client, cli_reveal_keybind = parse_args()
+
     print("==========================================")
     print("      LLM Secret Redactor Installer       ")
     print("    Supports Claude Code and OpenCode     ")
@@ -533,7 +522,6 @@ def main():
     if "__file__" in globals() and os.path.isfile(__file__):
         caller_dir = os.path.dirname(os.path.abspath(__file__))
 
-    cli_action, cli_scope, cli_client, cli_reveal_keybind = parse_args()
 
     # 1. Action
     if cli_action:

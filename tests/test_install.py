@@ -99,6 +99,16 @@ class OpenCodeInstallerTests(unittest.TestCase):
                 destination, "plugins", "secret-redactor", "plugin.mjs"
             )))
 
+    def test_parse_args_accepts_flags_or_command(self):
+        self.assertEqual(
+            install.parse_args(["--install", "--opencode", "--local", "--reveal-keybind=ctrl+k"]),
+            ("install", "local", "opencode", "ctrl+k"),
+        )
+        self.assertEqual(
+            install.parse_args(["uninstall", "--client=CLAUDE", "--scope", "global"]),
+            ("uninstall", "global", "claude", None),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
