@@ -1,73 +1,25 @@
 import json
 import os
-import re
 import socket
-import stat
 import subprocess
 import sys
 import time
 from typing import Any, Dict, Tuple
 
 
-DEFAULT_PATTERNS = [
-    {"name": "Anthropic key", "pattern": r"(?<![A-Za-z0-9_])sk-ant-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
-    {"name": "OpenAI key", "pattern": r"(?<![A-Za-z0-9_])sk-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
-    {"name": "GitHub Token", "pattern": r"(?<![A-Za-z0-9_])gh[pousr]_[a-zA-Z0-9]{36,}", "kind": "TOKEN"},
-    {"name": "AWS Access Key ID", "pattern": r"(?<![A-Za-z0-9_])(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])", "kind": "AWS_KEY"},
-    {"name": "Generic bearer token", "pattern": r"bearer\s+([a-zA-Z0-9_\-\.]{20,})", "flags": "i", "kind": "BEARER_TOKEN"},
-    {"name": "URI with credentials", "pattern": r"([a-z0-9+.\-]+://[^:\s@/]+:)([^@\s/]+)(@)", "flags": "i", "kind": "URI_PASS"},
-    {"name": "Key-value secrets", "pattern": r"""(["']?(?:password|passwd|secret|api[_-]?key|token|auth_token)["']?\s*[:=]\s*["']?)([^\s"',;}{]{6,})(["']?)""", "flags": "i", "kind": "KV_SECRET"},
-    {"name": "JWT token pattern", "pattern": r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}", "kind": "JWT_TOKEN"},
-]
+try:
+    from . import broker
+except ImportError:
+    import broker
 
 
-def load_patterns():
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "patterns.json"),
-        os.path.join(os.getcwd(), "patterns.json"),
-    ]
-    raw_patterns = None
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate, "r", encoding="utf-8") as handle:
-                    raw_patterns = json.load(handle)
-                break
-            except Exception:
-                continue
-    compiled = []
-    for item in raw_patterns or DEFAULT_PATTERNS:
-        flags = re.IGNORECASE if "i" in item.get("flags", "") else 0
-        compiled.append((re.compile(item["pattern"], flags), item["kind"]))
-    return compiled
-
-
-SECRET_PATTERNS = load_patterns()
-BROKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broker.py")
+SECRET_PATTERNS = broker.PATTERNS
+BROKER_SCRIPT = os.path.abspath(broker.__file__)
 _BROKER_PROCESS = None
 
 
-def get_runtime_dir() -> str:
-    override = os.environ.get("SECRET_REDACTOR_RUNTIME_DIR")
-    if override:
-        return os.path.abspath(os.path.expanduser(override))
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if base:
-        return os.path.join(base, "llm-secret-redactor")
-    return os.path.join("/tmp", f"llm-secret-redactor-{os.getuid()}")
-
-
-def get_socket_path() -> str:
-    return os.path.join(get_runtime_dir(), "broker.sock")
-
-
-def _ensure_runtime_dir():
-    directory = get_runtime_dir()
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    info = os.lstat(directory)
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise RuntimeError(f"Unsafe broker runtime directory: {directory}")
-    os.chmod(directory, 0o700)
+get_runtime_dir = broker.runtime_dir
+get_socket_path = broker.socket_path
 
 
 def _send(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,7 +48,7 @@ def _start_broker():
     global _BROKER_PROCESS
     if not os.path.isfile(BROKER_SCRIPT):
         raise RuntimeError(f"Secret broker executable is missing: {BROKER_SCRIPT}")
-    _ensure_runtime_dir()
+    broker.ensure_runtime_dir()
     _BROKER_PROCESS = subprocess.Popen(
         [sys.executable, BROKER_SCRIPT, "--serve"],
         stdin=subprocess.DEVNULL,
