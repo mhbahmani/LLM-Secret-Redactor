@@ -13,7 +13,7 @@ def main():
             sys.exit(0)
 
         data = json.loads(raw_input)
-        session_id = data.get("session_id", "default")
+        session_id = data["session_id"]
         tool_input = data.get("tool_input")
 
         if tool_input is None:

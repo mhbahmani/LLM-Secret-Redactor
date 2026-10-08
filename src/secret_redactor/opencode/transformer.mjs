@@ -46,7 +46,7 @@ async function maskPart(part, sessionID) {
  * Masks assembled model messages in place before they are dispatched.
  * OpenCode passes messages as { info, parts } pairs.
  */
-async function maskModelMessages(messages, fallbackSessionID = "default") {
+async function maskModelMessages(messages, fallbackSessionID) {
   if (!Array.isArray(messages)) {
     return messages;
   }
@@ -56,6 +56,9 @@ async function maskModelMessages(messages, fallbackSessionID = "default") {
       continue;
     }
     const sessionID = msg.info?.sessionID || msg.sessionID || fallbackSessionID;
+    if (!sessionID) {
+      throw new Error("secret-redactor: model message has no session ID");
+    }
     for (const part of msg.parts) {
       if (part && typeof part === "object") {
         await maskPart(part, sessionID);

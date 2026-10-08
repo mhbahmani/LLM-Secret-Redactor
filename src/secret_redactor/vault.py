@@ -4,7 +4,7 @@ import socket
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 try:
@@ -69,8 +69,10 @@ def _start_broker():
     raise RuntimeError(f"Secret broker did not start: {last_error}")
 
 
-def broker_request(operation: str, session_id: str = "default", value: Any = None) -> Dict[str, Any]:
-    request = {"operation": operation, "session": session_id or "default"}
+def broker_request(operation: str, session_id: Optional[str] = None, value: Any = None) -> Dict[str, Any]:
+    request = {"operation": operation}
+    if session_id is not None:
+        request["session"] = session_id
     if value is not None:
         request["value"] = value
     try:

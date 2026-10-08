@@ -91,7 +91,6 @@ class BrokerState:
         self.stopping = False
 
     def session(self, session_id, create=True):
-        session_id = str(session_id or "default")
         vault = self.sessions.get(session_id)
         if vault is None and create:
             vault = SessionVault()
@@ -101,7 +100,7 @@ class BrokerState:
         return vault
 
     def clear(self, session_id):
-        self.sessions.pop(str(session_id or "default"), None)
+        self.sessions.pop(session_id, None)
         if not self.sessions:
             self.empty_since = time.monotonic()
 
@@ -115,6 +114,7 @@ class BrokerState:
 
 
 STATE = BrokerState()
+SESSION_OPERATIONS = {"clear", "tokens", "reveal", "mask", "unmask"}
 
 
 def mask_text(text, vault, mappings):
@@ -131,7 +131,9 @@ def handle_request(request):
     if operation == "ping":
         return {"ok": True, "pid": os.getpid()}
 
-    session_id = request.get("session", "default")
+    session_id = request.get("session")
+    if operation in SESSION_OPERATIONS and (not isinstance(session_id, str) or not session_id):
+        raise ValueError(f"Broker operation {operation!r} requires a session id")
     with STATE.lock:
         if operation == "clear":
             STATE.clear(session_id)

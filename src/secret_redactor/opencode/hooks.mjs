@@ -1,10 +1,17 @@
 import { unmaskRecursive, maskText, maskRecursive } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
+function requireSession(input) {
+  if (!input?.sessionID) {
+    throw new Error("secret-redactor: hook input has no session ID");
+  }
+  return input.sessionID;
+}
+
 function createHooks() {
   const hooks = {
     "chat.message": async (input, output) => {
-      const sessionID = input?.sessionID || "default";
+      const sessionID = requireSession(input);
       for (const part of (output?.parts || [])) {
         if (part && typeof part === "object" && typeof part.text === "string") {
           const [masked] = await maskText(part.text, sessionID);
@@ -20,7 +27,7 @@ function createHooks() {
     },
 
     "tool.execute.before": async (input, output) => {
-      const sessionID = input?.sessionID || "default";
+      const sessionID = requireSession(input);
       if (output && output.args !== undefined) {
         const [unmasked, changed] = await unmaskRecursive(output.args, sessionID);
         if (changed) {
@@ -30,7 +37,7 @@ function createHooks() {
     },
 
     "tool.execute.after": async (input, output) => {
-      const sessionID = input?.sessionID || "default";
+      const sessionID = requireSession(input);
       if (output && typeof output.output === "string") {
         const [masked] = await maskText(output.output, sessionID);
         output.output = masked;
@@ -42,7 +49,7 @@ function createHooks() {
     },
 
     "experimental.session.compacting": async (input, output) => {
-      const sessionID = input?.sessionID || "default";
+      const sessionID = requireSession(input);
       if (output && Array.isArray(output.context)) {
         output.context = await Promise.all(output.context.map(async (c) => {
           if (typeof c === "string") {

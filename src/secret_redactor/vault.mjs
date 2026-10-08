@@ -133,8 +133,9 @@ async function rawBrokerRequest(request) {
   }
 }
 
-async function brokerRequest(operation, sessionID = "default", value) {
-  const request = { operation, session: sessionID || "default" };
+async function brokerRequest(operation, sessionID, value) {
+  const request = { operation };
+  if (sessionID !== undefined) request.session = sessionID;
   if (value !== undefined) request.value = value;
   return rawBrokerRequest(request);
 }

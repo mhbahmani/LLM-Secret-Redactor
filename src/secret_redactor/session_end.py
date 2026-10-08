@@ -10,7 +10,7 @@ from vault import clear_session
 def main():
     try:
         data = json.loads(sys.stdin.read() or "{}")
-        clear_session(data.get("session_id", "default"))
+        clear_session(data["session_id"])
         print(json.dumps({}))
     except Exception:
         sys.exit(0)

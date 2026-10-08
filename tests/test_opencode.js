@@ -350,3 +350,11 @@ test("Node and Python clients resolve the same broker socket", async () => {
     assert.equal(node.stdout.trim(), python.stdout.trim(), JSON.stringify(overrides));
   }
 });
+
+test("Hooks refuse to mask without a session ID", async () => {
+  const hooks = await plugin.server({});
+  const messages = [{ info: { id: "m", role: "user" }, parts: [{ type: "text", text: "hello" }] }];
+  await assert.rejects(hooks["experimental.chat.messages.transform"]({}, { messages }), /no session ID/);
+  await assert.rejects(hooks["tool.execute.before"]({ tool: "bash" }, { args: {} }), /no session ID/);
+  await assert.rejects(vault.rawBrokerRequest({ operation: "mask", value: "x" }), /requires a session id/);
+});
