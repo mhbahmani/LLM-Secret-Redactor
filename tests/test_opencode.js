@@ -269,10 +269,24 @@ test("Session isolation: sessions do not cross-unmask tokens", async () => {
     args: { key: tokenA }
   };
 
-  await hooks["tool.execute.before"]({ tool: "test", sessionID: sessionB, callID: "c-3" }, toolInputB);
-
-  // Session B does not have tokenA in its vault, so it remains unchanged
+  // Session B does not know tokenA, so the tool must not run with it.
+  await assert.rejects(
+    hooks["tool.execute.before"]({ tool: "test", sessionID: sessionB, callID: "c-3" }, toolInputB),
+    /unknown to this session/,
+  );
   assert.equal(toolInputB.args.key, tokenA);
+});
+
+test("Token-shaped text seen in tool output can be written back", async () => {
+  const sessionID = "test-literal-token";
+  const hooks = await plugin.server({});
+  const fixture = "__MASKED_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA__";
+  const result = { title: "", output: `const TOKEN_A = "${fixture}";`, metadata: {} };
+  await hooks["tool.execute.after"]({ tool: "read", sessionID, callID: "c-4", args: {} }, result);
+
+  const edit = { args: { newString: `const TOKEN_A = "${fixture}"; // edited` } };
+  await hooks["tool.execute.before"]({ tool: "edit", sessionID, callID: "c-5" }, edit);
+  assert.ok(edit.args.newString.includes(fixture));
 });
 
 test("Canonical messages are always masked and never auto-revealed", async () => {

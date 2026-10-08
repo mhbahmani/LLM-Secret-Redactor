@@ -1,4 +1,4 @@
-import { unmaskRecursive, maskText, maskRecursive, clearSession } from "./vault.mjs";
+import { brokerRequest, maskText, maskRecursive, clearSession } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
 function requireSession(input) {
@@ -33,11 +33,19 @@ function createHooks() {
 
     "tool.execute.before": async (input, output) => {
       const sessionID = requireSession(input);
-      if (output && output.args !== undefined) {
-        const [unmasked, changed] = await unmaskRecursive(output.args, sessionID);
-        if (changed) {
-          output.args = unmasked;
-        }
+      if (!output || output.args === undefined) return;
+      const response = await brokerRequest("unmask", sessionID, output.args);
+      if (response.unresolved?.length) {
+        // Running the tool would write literal mask tokens to disk or send
+        // them to a service, e.g. tokens from an expired or other session.
+        throw new Error(
+          "secret-redactor: these masked values are unknown to this session " +
+          `(expired, restarted, or from another session): ${response.unresolved.join(", ")}. ` +
+          "Re-read the source to get fresh values.",
+        );
+      }
+      if (response.changed) {
+        output.args = response.value;
       }
     },
 

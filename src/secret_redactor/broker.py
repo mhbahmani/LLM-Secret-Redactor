@@ -14,9 +14,9 @@ import threading
 import time
 
 try:
-    from .redaction import load_patterns, redact, transform_value
+    from .redaction import TOKEN_RE, load_patterns, redact, transform_value
 except ImportError:
-    from redaction import load_patterns, redact, transform_value
+    from redaction import TOKEN_RE, load_patterns, redact, transform_value
 
 
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
@@ -57,6 +57,9 @@ class SessionVault:
     def __init__(self):
         self.token_to_secret = {}
         self.secret_to_token = {}
+        # Token-shaped text that already existed in masked input (e.g. test
+        # fixtures). It is passed through as-is rather than treated as unknown.
+        self.literal_tokens = set()
         self.last_access = time.monotonic()
 
     def touch(self):
@@ -76,11 +79,23 @@ class SessionVault:
         self.token_to_secret[token] = secret
         return token
 
-    def unmask_text(self, text):
+    def remember_literals(self, text):
+        for token in TOKEN_RE.findall(text):
+            if token not in self.token_to_secret:
+                self.literal_tokens.add(token)
+
+    def unmask_text(self, text, unresolved):
         self.touch()
-        for token, secret in sorted(self.token_to_secret.items(), key=lambda item: len(item[0]), reverse=True):
-            text = text.replace(token, secret)
-        return text
+
+        def restore(match):
+            token = match.group(0)
+            if token in self.token_to_secret:
+                return self.token_to_secret[token]
+            if token not in self.literal_tokens:
+                unresolved.add(token)
+            return token
+
+        return TOKEN_RE.sub(restore, text)
 
 
 class BrokerState:
@@ -118,6 +133,9 @@ SESSION_OPERATIONS = {"clear", "tokens", "reveal", "mask", "unmask"}
 
 
 def mask_text(text, vault, mappings):
+    if isinstance(text, str):
+        vault.remember_literals(text)
+
     def replace(kind, secret):
         token = vault.token_for(kind, secret)
         mappings[token] = secret
@@ -169,10 +187,16 @@ def handle_request(request):
             return {"ok": True, "value": transformed, "changed": transformed != original, "mappings": mappings}
         if operation == "unmask":
             original = request.get("value")
-            if vault is None:
-                return {"ok": True, "value": original, "changed": False}
-            transformed = transform_value(original, vault.unmask_text)
-            return {"ok": True, "value": transformed, "changed": transformed != original}
+            unresolved = set()
+            # An unknown session still reports its tokens as unresolved.
+            source = vault or SessionVault()
+            transformed = transform_value(original, lambda text: source.unmask_text(text, unresolved))
+            return {
+                "ok": True,
+                "value": transformed,
+                "changed": transformed != original,
+                "unresolved": sorted(unresolved),
+            }
     raise ValueError(f"Unsupported broker operation: {operation}")
 
 

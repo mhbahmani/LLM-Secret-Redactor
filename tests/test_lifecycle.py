@@ -80,6 +80,17 @@ def test_flow():
     assert "ghp_123456789012345678901234567890123456" in updated_input.get("command", "")
     print("✓ pre_tool_use: successfully restored real secret when tool is executed")
 
+    # 5. PreToolUse refuses tokens that the session cannot resolve
+    stale = "__MASKED_TOKEN_" + "0" * 32 + "__"
+    res = run_hook("pre_tool_use.py", {
+        "session_id": SESSION,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": f"KEY={stale}"}
+    })
+    assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
+    print("✓ pre_tool_use: blocked a tool call with an unknown mask token")
+
     print("\nALL LIFECYCLE TESTS PASSED.")
 
 if __name__ == "__main__":
