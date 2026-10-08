@@ -358,3 +358,14 @@ test("Hooks refuse to mask without a session ID", async () => {
   await assert.rejects(hooks["tool.execute.before"]({ tool: "bash" }, { args: {} }), /no session ID/);
   await assert.rejects(vault.rawBrokerRequest({ operation: "mask", value: "x" }), /requires a session id/);
 });
+
+test("Deleting an OpenCode session clears its mappings", async () => {
+  const sessionID = "test-session-deleted";
+  const hooks = await plugin.server({});
+  const [, mappings] = await vault.maskText("key sk-proj-1234567890abcdef1234567890", sessionID);
+  const token = Object.keys(mappings)[0];
+
+  await hooks.event({ event: { type: "session.deleted", properties: { info: { id: sessionID } } } });
+
+  assert.equal(await vault.unmaskText(token, sessionID), token);
+});

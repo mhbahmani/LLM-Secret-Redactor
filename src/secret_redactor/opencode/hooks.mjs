@@ -1,4 +1,4 @@
-import { unmaskRecursive, maskText, maskRecursive } from "./vault.mjs";
+import { unmaskRecursive, maskText, maskRecursive, clearSession } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
 function requireSession(input) {
@@ -10,6 +10,11 @@ function requireSession(input) {
 
 function createHooks() {
   const hooks = {
+    event: async ({ event }) => {
+      const sessionID = event?.type === "session.deleted" ? event.properties?.info?.id : undefined;
+      if (sessionID) await clearSession(sessionID);
+    },
+
     "chat.message": async (input, output) => {
       const sessionID = requireSession(input);
       for (const part of (output?.parts || [])) {
