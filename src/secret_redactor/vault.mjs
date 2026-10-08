@@ -123,9 +123,7 @@ async function startBroker() {
   }
 }
 
-async function brokerRequest(operation, sessionID = "default", value) {
-  const request = { operation, session: sessionID || "default" };
-  if (value !== undefined) request.value = value;
+async function rawBrokerRequest(request) {
   try {
     return await sendRequest(request);
   } catch (error) {
@@ -135,14 +133,10 @@ async function brokerRequest(operation, sessionID = "default", value) {
   }
 }
 
-async function rawBrokerRequest(request) {
-  try {
-    return await sendRequest(request);
-  } catch (error) {
-    if (!["ENOENT", "ECONNREFUSED", "ECONNRESET"].includes(error.code)) throw error;
-    await startBroker();
-    return sendRequest(request);
-  }
+async function brokerRequest(operation, sessionID = "default", value) {
+  const request = { operation, session: sessionID || "default" };
+  if (value !== undefined) request.value = value;
+  return rawBrokerRequest(request);
 }
 
 async function maskText(text, sessionID) {
