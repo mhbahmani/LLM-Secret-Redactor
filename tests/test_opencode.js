@@ -381,3 +381,29 @@ print(unmask_text("${jsToken}", "${sessionID}"))
   assert.equal(pyProc2.status, 0);
   assert.equal(pyProc2.stdout.trim(), secretGh);
 });
+
+test("Node and Python clients resolve the same broker socket", async () => {
+  const { spawnSync } = require("node:child_process");
+  const vaultPath = path.resolve(__dirname, "../src/secret_redactor/vault.mjs");
+  const brokerDir = path.resolve(__dirname, "../src/secret_redactor");
+  const cases = [
+    { SECRET_REDACTOR_RUNTIME_DIR: "~/redactor-test-runtime" },
+    { XDG_RUNTIME_DIR: "/run/user/test-xdg" },
+    { TMPDIR: "/var/folders/test-tmp" },
+  ];
+  for (const overrides of cases) {
+    const env = { ...process.env, ...overrides };
+    if (!("SECRET_REDACTOR_RUNTIME_DIR" in overrides)) delete env.SECRET_REDACTOR_RUNTIME_DIR;
+    if (!("XDG_RUNTIME_DIR" in overrides)) delete env.XDG_RUNTIME_DIR;
+    const node = spawnSync(process.execPath, [
+      "--input-type=module", "-e",
+      `const v = await import(${JSON.stringify(vaultPath)}); console.log(v.getSocketPath());`,
+    ], { env, encoding: "utf-8" });
+    const python = spawnSync("python3", [
+      "-c", "import sys; sys.path.insert(0, sys.argv[1]); import broker; print(broker.socket_path())", brokerDir,
+    ], { env, encoding: "utf-8" });
+    assert.equal(node.status, 0, node.stderr);
+    assert.equal(python.status, 0, python.stderr);
+    assert.equal(node.stdout.trim(), python.stdout.trim(), JSON.stringify(overrides));
+  }
+});

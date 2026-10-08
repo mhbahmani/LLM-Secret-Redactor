@@ -9,15 +9,23 @@ const BROKER_SCRIPT = fileURLToPath(new URL("./broker.py", import.meta.url));
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 let startPromise = null;
 
+function expandHome(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+// Must match runtime_dir() in broker.py: the broker computes its own socket
+// path, so any difference here leaves clients waiting on the wrong socket.
 function getRuntimeDir() {
   if (process.env.SECRET_REDACTOR_RUNTIME_DIR) {
-    return path.resolve(process.env.SECRET_REDACTOR_RUNTIME_DIR);
+    return path.resolve(expandHome(process.env.SECRET_REDACTOR_RUNTIME_DIR));
   }
   if (process.env.XDG_RUNTIME_DIR) {
     return path.join(process.env.XDG_RUNTIME_DIR, "llm-secret-redactor");
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : "user";
-  return path.join(os.tmpdir(), `llm-secret-redactor-${uid}`);
+  return path.join("/tmp", `llm-secret-redactor-${uid}`);
 }
 
 function getSocketPath() {
