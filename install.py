@@ -78,7 +78,8 @@ def prompt_menu(title, options):
             pass
         return 0
 
-    import tty, termios
+    import termios
+    import tty
     old_settings = termios.tcgetattr(tty_fd)
     tty_out = os.fdopen(os.dup(tty_fd), 'w')
     selected = 0

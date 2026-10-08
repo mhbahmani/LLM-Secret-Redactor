@@ -69,7 +69,9 @@ def _start_broker():
     raise RuntimeError(f"Secret broker did not start: {last_error}")
 
 
-def broker_request(operation: str, session_id: Optional[str] = None, value: Any = None, **fields: Any) -> Dict[str, Any]:
+def broker_request(
+    operation: str, session_id: Optional[str] = None, value: Any = None, **fields: Any
+) -> Dict[str, Any]:
     request = {"operation": operation, **fields}
     if session_id is not None:
         request["session"] = session_id

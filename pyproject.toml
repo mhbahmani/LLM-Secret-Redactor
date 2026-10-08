@@ -1,0 +1,16 @@
+[project]
+name = "llm-secret-redactor"
+version = "1.0.0"
+description = "Memory-only secret redactor for Claude Code and OpenCode"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["test-project"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests put src/ on sys.path before importing the package.
+"tests/*" = ["E402"]
