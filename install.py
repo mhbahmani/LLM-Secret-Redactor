@@ -175,6 +175,20 @@ def get_script_source(rel_path, local_repo_dir):
             continue
     raise RuntimeError(f"Could not fetch {rel_path} from local files or {REPO_RAW_URL}")
 
+def replace_install_dir(target_dir, files, local_repo_dir):
+    """Fetch every file before touching target_dir, then replace it whole so
+    files from older releases do not linger next to the new ones."""
+    contents = [(dest_rel, get_script_source(src_rel, local_repo_dir)) for src_rel, dest_rel in files]
+    if os.path.isdir(target_dir):
+        shutil.rmtree(target_dir)
+    os.makedirs(target_dir)
+    for dest_rel, content in contents:
+        target_path = os.path.join(target_dir, dest_rel)
+        with open(target_path, "wb") as f:
+            f.write(content)
+        if target_path.endswith(".py"):
+            os.chmod(target_path, 0o755)
+
 # --- Claude Code Operations ---
 
 def do_uninstall_claude(chosen_dir):
@@ -245,16 +259,9 @@ def do_uninstall_claude(chosen_dir):
 def do_install_claude(chosen_dir, local_repo_dir):
     hooks_dir = os.path.join(chosen_dir, "hooks", APP_NAME)
     settings_file = os.path.join(chosen_dir, "settings.json")
-    os.makedirs(hooks_dir, exist_ok=True)
 
     print(f"\nInstalling Claude Code hooks into {hooks_dir}...")
-    for src_rel, dest_rel in CLAUDE_FILES:
-        content = get_script_source(src_rel, local_repo_dir)
-        target_path = os.path.join(hooks_dir, dest_rel)
-        with open(target_path, "wb") as f:
-            f.write(content)
-        if target_path.endswith(".py"):
-            os.chmod(target_path, 0o755)
+    replace_install_dir(hooks_dir, CLAUDE_FILES, local_repo_dir)
 
     cwd = os.getcwd()
     if os.path.abspath(chosen_dir) == os.path.abspath(os.path.join(cwd, ".claude")):
@@ -463,15 +470,9 @@ def do_uninstall_opencode(chosen_dir, is_global):
 
 def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DEFAULT_REVEAL_KEYBIND):
     plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
-    os.makedirs(plugins_dir, exist_ok=True)
 
     print(f"\nInstalling OpenCode plugin into {plugins_dir}...")
-    for src_rel, dest_rel in OPENCODE_FILES:
-        content = get_script_source(src_rel, local_repo_dir)
-        target_path = os.path.join(plugins_dir, dest_rel)
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with open(target_path, "wb") as f:
-            f.write(content)
+    replace_install_dir(plugins_dir, OPENCODE_FILES, local_repo_dir)
 
     trampoline = os.path.join(chosen_dir, "plugins", f"{APP_NAME}.js")
     with open(trampoline, "w", encoding="utf-8") as f:

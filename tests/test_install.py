@@ -83,6 +83,22 @@ class OpenCodeInstallerTests(unittest.TestCase):
                 claude_dir, "hooks", "secret-redactor", "broker.py"
             )))
 
+    def test_reinstall_removes_files_from_older_releases(self):
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with tempfile.TemporaryDirectory() as project_dir:
+            destination = os.path.join(project_dir, ".opencode")
+            stale = os.path.join(destination, "plugins", "secret-redactor", "v2.js")
+            os.makedirs(os.path.dirname(stale))
+            with open(stale, "w", encoding="utf-8") as handle:
+                handle.write("// old release")
+
+            install.do_install_opencode(destination, False, repo_dir)
+
+            self.assertFalse(os.path.exists(stale))
+            self.assertTrue(os.path.isfile(os.path.join(
+                destination, "plugins", "secret-redactor", "plugin.mjs"
+            )))
+
 
 if __name__ == "__main__":
     unittest.main()
