@@ -102,6 +102,14 @@ class TestVaultCore(unittest.TestCase):
         self.assertTrue(changed_back)
         self.assertEqual(unmasked_data, data)
 
+    def test_mask_recursive_covers_dict_keys(self):
+        secret = "sk-proj-1234567890abcdef1234567890"
+        data = {"keys": {secret: "primary"}}
+        masked_data, changed = mask_recursive(data, self.session_id)
+        self.assertTrue(changed)
+        self.assertNotIn(secret, str(masked_data))
+        self.assertEqual(unmask_recursive(masked_data, self.session_id)[0], data)
+
     def test_single_broker_process_is_reused(self):
         first = broker_stats()["pid"]
         second = broker_stats()["pid"]

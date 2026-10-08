@@ -70,5 +70,8 @@ def transform_value(value, transform):
     if isinstance(value, list):
         return [transform_value(item, transform) for item in value]
     if isinstance(value, dict):
-        return {key: transform_value(item, transform) for key, item in value.items()}
+        return {
+            transform(key) if isinstance(key, str) else key: transform_value(item, transform)
+            for key, item in value.items()
+        }
     return value
