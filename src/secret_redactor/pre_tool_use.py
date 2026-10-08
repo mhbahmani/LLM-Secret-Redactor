@@ -4,6 +4,7 @@ import json
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from redaction import TOKEN_RE
 from vault import restore_tool_input
 
 
@@ -19,6 +20,7 @@ def decision(permission, reason, updated_input=None):
 
 
 def main():
+    raw_input = None
     try:
         raw_input = sys.stdin.read()
         if not raw_input:
@@ -53,8 +55,16 @@ def main():
         else:
             print(json.dumps({}))
 
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        # Fail closed only when the input references masked values; without
+        # the broker they cannot be restored.
+        if TOKEN_RE.search(raw_input or ""):
+            print(json.dumps(decision(
+                "deny",
+                f"secret-redactor: cannot restore masked values right now ({exc}).",
+            )))
+        else:
+            sys.exit(0)
 
 if __name__ == "__main__":
     main()

@@ -11,13 +11,14 @@ SESSION = "test-session-123"
 TEST_RUNTIME_DIR = tempfile.mkdtemp(prefix="llm-redactor-lifecycle-")
 os.environ["SECRET_REDACTOR_RUNTIME_DIR"] = TEST_RUNTIME_DIR
 
-def run_hook(script_name: str, input_data: dict) -> dict:
+def run_hook(script_name: str, input_data: dict, env: dict = None) -> dict:
     script_path = os.path.join(SRC_DIR, script_name)
     proc = subprocess.run(
         [sys.executable, script_path],
         input=json.dumps(input_data),
         text=True,
-        capture_output=True
+        capture_output=True,
+        env={**os.environ, **(env or {})},
     )
     assert proc.returncode == 0, f"Hook failed: {proc.stderr}"
     if not proc.stdout.strip():
@@ -90,6 +91,23 @@ def test_flow():
     })
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
     print("✓ pre_tool_use: blocked a tool call with an unknown mask token")
+
+    # 6. Without a broker, hooks still keep secrets away from the model
+    broken = {"SECRET_REDACTOR_RUNTIME_DIR": os.path.join(TEST_RUNTIME_DIR, "broker.sock", "missing")}
+    res = run_hook("post_tool_use.py", {
+        "session_id": SESSION,
+        "tool_name": "Bash",
+        "tool_response": fake_tool_res,
+    }, env=broken)
+    stdout = res["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+    assert "supersecretpass123" not in stdout and "[REDACTED_URIPASS]" in stdout, stdout
+    res = run_hook("pre_tool_use.py", {
+        "session_id": SESSION,
+        "tool_name": "Bash",
+        "tool_input": {"command": f"echo {gh_token}"},
+    }, env=broken)
+    assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
+    print("✓ hooks: fail closed when the broker is unavailable")
 
     print("\nALL LIFECYCLE TESTS PASSED.")
 
