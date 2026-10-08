@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-import re
 import secrets
 import signal
 import socket
@@ -13,6 +12,11 @@ import stat
 import struct
 import threading
 import time
+
+try:
+    from .redaction import load_patterns, redact, transform_value
+except ImportError:
+    from redaction import load_patterns, redact, transform_value
 
 
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
@@ -44,17 +48,6 @@ def ensure_runtime_dir():
         raise RuntimeError(f"Broker runtime directory is not owned by the current user: {directory}")
     os.chmod(directory, 0o700)
     return directory
-
-
-def load_patterns():
-    pattern_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "patterns.json")
-    with open(pattern_file, "r", encoding="utf-8") as handle:
-        raw_patterns = json.load(handle)
-    compiled = []
-    for item in raw_patterns:
-        flags = re.IGNORECASE if "i" in item.get("flags", "") else 0
-        compiled.append((re.compile(item["pattern"], flags), item["kind"]))
-    return compiled
 
 
 PATTERNS = load_patterns()
@@ -125,57 +118,12 @@ STATE = BrokerState()
 
 
 def mask_text(text, vault, mappings):
-    if not isinstance(text, str) or not text:
-        return text
-    result = text
-    for regex, kind in PATTERNS:
-        if kind == "KV_SECRET":
-            def replace_kv(match):
-                prefix, secret, suffix = match.group(1), match.group(2), match.group(3)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return match.group(0)
-                token = vault.token_for("SECRET", secret)
-                mappings[token] = secret
-                return f"{prefix}{token}{suffix}"
-            result = regex.sub(replace_kv, result)
-        elif kind == "URI_PASS":
-            def replace_uri(match):
-                prefix, secret, suffix = match.group(1), match.group(2), match.group(3)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return match.group(0)
-                token = vault.token_for("URIPASS", secret)
-                mappings[token] = secret
-                return f"{prefix}{token}{suffix}"
-            result = regex.sub(replace_uri, result)
-        elif kind == "BEARER_TOKEN":
-            def replace_bearer(match):
-                secret = match.group(1)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return match.group(0)
-                token = vault.token_for("BEARER", secret)
-                mappings[token] = secret
-                return f"Bearer {token}"
-            result = regex.sub(replace_bearer, result)
-        else:
-            def replace_standard(match, token_kind=kind):
-                secret = match.group(0)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return secret
-                token = vault.token_for(token_kind, secret)
-                mappings[token] = secret
-                return token
-            result = regex.sub(replace_standard, result)
-    return result
+    def replace(kind, secret):
+        token = vault.token_for(kind, secret)
+        mappings[token] = secret
+        return token
 
-
-def transform_value(value, transform):
-    if isinstance(value, str):
-        return transform(value)
-    if isinstance(value, list):
-        return [transform_value(item, transform) for item in value]
-    if isinstance(value, dict):
-        return {key: transform_value(item, transform) for key, item in value.items()}
-    return value
+    return redact(text, PATTERNS, replace)
 
 
 def handle_request(request):

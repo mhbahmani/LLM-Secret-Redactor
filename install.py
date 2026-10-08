@@ -13,6 +13,7 @@ DEFAULT_REVEAL_KEYBIND = "ctrl+shift+r"
 
 CLAUDE_FILES = [
     ("broker.py", "broker.py"),
+    ("redaction.py", "redaction.py"),
     ("vault.py", "vault.py"),
     ("patterns.json", "patterns.json"),
     ("session_start.py", "session_start.py"),
@@ -25,6 +26,7 @@ CLAUDE_FILES = [
 
 OPENCODE_FILES = [
     ("broker.py", "broker.py"),
+    ("redaction.py", "redaction.py"),
     ("vault.mjs", "vault.mjs"),
     ("patterns.json", "patterns.json"),
     ("opencode/transformer.mjs", "transformer.mjs"),
