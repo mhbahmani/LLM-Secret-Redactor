@@ -21,7 +21,7 @@ class OpenCodeInstallerTests(unittest.TestCase):
             with open(config_path, "r", encoding="utf-8") as handle:
                 self.assertEqual(json.load(handle), original_config)
             self.assertTrue(os.path.isfile(os.path.join(destination, "plugins", "secret-redactor.js")))
-            self.assertTrue(os.path.isfile(os.path.join(destination, "plugins", "secret-redactor", "plugin.js")))
+            self.assertTrue(os.path.isfile(os.path.join(destination, "plugins", "secret-redactor", "plugin.mjs")))
             self.assertTrue(os.path.isfile(os.path.join(destination, "plugins", "secret-redactor", "broker.py")))
             self.assertTrue(os.path.isfile(os.path.join(destination, "plugins", "secret-redactor", "tui.mjs")))
             with open(os.path.join(destination, "tui.json"), "r", encoding="utf-8") as handle:

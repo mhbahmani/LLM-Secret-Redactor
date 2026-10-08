@@ -1,10 +1,11 @@
-const fs = require("node:fs");
-const net = require("node:net");
-const os = require("node:os");
-const path = require("node:path");
-const { spawn } = require("node:child_process");
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const BROKER_SCRIPT = path.join(__dirname, "broker.py");
+const BROKER_SCRIPT = fileURLToPath(new URL("./broker.py", import.meta.url));
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 let startPromise = null;
 
@@ -180,7 +181,7 @@ async function shutdownBroker() {
   return response;
 }
 
-module.exports = {
+export {
   getRuntimeDir,
   getSocketPath,
   brokerRequest,

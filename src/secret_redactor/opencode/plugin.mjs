@@ -1,6 +1,1 @@
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const plugin = require("./index.js");
-
-export default plugin;
+export { default } from "./index.mjs";

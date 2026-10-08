@@ -1,5 +1,5 @@
-const { createV1Hooks } = require("./v1.js");
-const { registerV2Hooks } = require("./v2.js");
+import { createV1Hooks } from "./v1.mjs";
+import { registerV2Hooks } from "./v2.mjs";
 
 async function plugin(input, options) {
   if (input && (input.session?.hook || input.tool?.hook)) {
@@ -9,4 +9,4 @@ async function plugin(input, options) {
   return createV1Hooks();
 }
 
-module.exports = plugin;
+export default plugin;

@@ -7,8 +7,11 @@ const os = require("node:os");
 const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-e2e-"));
 process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 
-const plugin = require("../src/secret_redactor/opencode/index.js");
-const vault = require("../src/secret_redactor/vault.js");
+let plugin, vault;
+test.before(async () => {
+  ({ default: plugin } = await import("../src/secret_redactor/opencode/index.mjs"));
+  vault = await import("../src/secret_redactor/vault.mjs");
+});
 
 test.after(async () => {
   await vault.shutdownBroker();

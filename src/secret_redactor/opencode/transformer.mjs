@@ -1,4 +1,4 @@
-const { maskText, maskRecursive } = require("./vault.js");
+import { maskText, maskRecursive } from "./vault.mjs";
 
 /**
  * Recursively masks sensitive content inside assembled model messages.
@@ -109,6 +109,6 @@ async function maskModelMessages(messages, fallbackSessionID = "default") {
   return messages;
 }
 
-module.exports = {
+export {
   maskModelMessages
 };

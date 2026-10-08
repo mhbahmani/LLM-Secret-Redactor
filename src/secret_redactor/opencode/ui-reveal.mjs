@@ -47,4 +47,4 @@ function createRevealController({ request, timeoutMs = 10_000, setTimer = setTim
   return { toggle, hide, isVisible: () => visible };
 }
 
-module.exports = { createRevealController };
+export { createRevealController };

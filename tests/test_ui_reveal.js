@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
-const { createRevealController } = require("../src/secret_redactor/opencode/ui-reveal.js");
+let createRevealController;
+test.before(async () => {
+  ({ createRevealController } = await import("../src/secret_redactor/opencode/ui-reveal.mjs"));
+});
 
 const TOKEN_A = "__MASKED_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA__";
 const TOKEN_B = "__MASKED_SECRET_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB__";

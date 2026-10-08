@@ -1,14 +1,5 @@
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const { createRevealController } = require("./ui-reveal.js");
-
-let vault;
-try {
-  vault = require("./vault.js");
-} catch {
-  vault = require("../vault.js");
-}
+import { createRevealController } from "./ui-reveal.mjs";
+import * as vault from "./vault.mjs";
 
 function currentSessionID(context) {
   const route = context.route.current;
@@ -29,12 +20,12 @@ function confirmDialog(api, selected, total) {
         ? `Reveal all ${total} session secrets for 10 seconds?`
         : `Reveal ${selected} secret${selected === 1 ? "" : "s"} from the selected text for 10 seconds?`,
       onConfirm: () => {
-        api.ui.dialog.clear();
         finish(true);
+        api.ui.dialog.clear();
       },
       onCancel: () => {
-        api.ui.dialog.clear();
         finish(false);
+        api.ui.dialog.clear();
       },
     }), () => finish(false));
   });

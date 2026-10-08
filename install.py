@@ -25,17 +25,16 @@ CLAUDE_FILES = [
 
 OPENCODE_FILES = [
     ("broker.py", "broker.py"),
-    ("vault.js", "vault.js"),
+    ("vault.mjs", "vault.mjs"),
     ("patterns.json", "patterns.json"),
-    ("opencode/transformer.js", "transformer.js"),
-    ("opencode/v1.js", "v1.js"),
-    ("opencode/v2.js", "v2.js"),
-    ("opencode/index.js", "index.js"),
-    ("opencode/plugin.js", "plugin.js"),
+    ("opencode/transformer.mjs", "transformer.mjs"),
+    ("opencode/v1.mjs", "v1.mjs"),
+    ("opencode/v2.mjs", "v2.mjs"),
+    ("opencode/index.mjs", "index.mjs"),
     ("opencode/plugin.mjs", "plugin.mjs"),
     ("opencode/plugin-v2.mjs", "plugin-v2.mjs"),
     ("opencode/tui.mjs", "tui.mjs"),
-    ("opencode/ui-reveal.js", "ui-reveal.js"),
+    ("opencode/ui-reveal.mjs", "ui-reveal.mjs"),
     ("opencode/package.json", "package.json")
 ]
 
@@ -475,7 +474,7 @@ def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DE
 
     trampoline = os.path.join(chosen_dir, "plugins", f"{APP_NAME}.js")
     with open(trampoline, "w", encoding="utf-8") as f:
-        f.write(f'module.exports = require("./{APP_NAME}/plugin.js");\n')
+        f.write(f'export {{ default }} from "./{APP_NAME}/plugin.mjs";\n')
 
     # OpenCode auto-loads files in its global and project plugin directories.
     # Registering the nested implementation in opencode.json as well would load

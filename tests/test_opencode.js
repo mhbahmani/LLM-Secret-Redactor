@@ -8,11 +8,12 @@ const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-ope
 process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 process.env.SECRET_REDACTOR_BROKER_IDLE = "10";
 
-const vault = require("../src/secret_redactor/vault.js");
-const plugin = require("../src/secret_redactor/opencode/index.js");
-const { maskModelMessages } = require("../src/secret_redactor/opencode/transformer.js");
-const { createV1Hooks } = require("../src/secret_redactor/opencode/v1.js");
-const { registerV2Hooks } = require("../src/secret_redactor/opencode/v2.js");
+let vault, plugin, createV1Hooks;
+test.before(async () => {
+  vault = await import("../src/secret_redactor/vault.mjs");
+  ({ default: plugin } = await import("../src/secret_redactor/opencode/index.mjs"));
+  ({ createV1Hooks } = await import("../src/secret_redactor/opencode/v1.mjs"));
+});
 
 test.after(async () => {
   await vault.shutdownBroker();
@@ -170,7 +171,7 @@ test("Concurrent clients reuse one broker process", async () => {
 test("Concurrent OS processes converge on one cold-start broker", async () => {
   const { spawn } = require("node:child_process");
   const isolatedRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-race-"));
-  const vaultPath = path.resolve(__dirname, "../src/secret_redactor/vault.js");
+  const vaultPath = path.resolve(__dirname, "../src/secret_redactor/vault.mjs");
   const runClient = (expression) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["-e", expression], {
       env: {
@@ -193,11 +194,11 @@ test("Concurrent OS processes converge on one cold-start broker", async () => {
   });
 
   try {
-    const expression = "require(process.env.TEST_VAULT_PATH).brokerStats().then(x => console.log(x.pid))";
+    const expression = "import(process.env.TEST_VAULT_PATH).then(v => v.brokerStats()).then(x => console.log(x.pid))";
     const pids = await Promise.all(Array.from({ length: 8 }, () => runClient(expression)));
     assert.equal(new Set(pids).size, 1);
   } finally {
-    await runClient("require(process.env.TEST_VAULT_PATH).shutdownBroker()")
+    await runClient("import(process.env.TEST_VAULT_PATH).then(v => v.shutdownBroker())")
       .catch(() => {});
     fs.rmSync(isolatedRuntime, { recursive: true, force: true });
   }

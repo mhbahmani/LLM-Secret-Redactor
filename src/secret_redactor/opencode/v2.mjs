@@ -1,5 +1,5 @@
-const { unmaskRecursive, maskText, maskRecursive, clearSession } = require("./vault.js");
-const { maskModelMessages } = require("./transformer.js");
+import { unmaskRecursive, maskText, maskRecursive, clearSession } from "./vault.mjs";
+import { maskModelMessages } from "./transformer.mjs";
 
 // TODO: Consider optional prompt-admission masking in the future.
 // Do not enable it now because OpenCode's prompt hook modifies the
@@ -65,6 +65,6 @@ function registerV2Hooks(ctx) {
   }
 }
 
-module.exports = {
+export {
   registerV2Hooks
 };

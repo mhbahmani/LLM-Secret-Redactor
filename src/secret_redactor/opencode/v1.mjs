@@ -1,5 +1,5 @@
-const { unmaskRecursive, maskText, maskRecursive } = require("./vault.js");
-const { maskModelMessages } = require("./transformer.js");
+import { unmaskRecursive, maskText, maskRecursive } from "./vault.mjs";
+import { maskModelMessages } from "./transformer.mjs";
 
 function createV1Hooks() {
   const hooks = {
@@ -62,6 +62,6 @@ function createV1Hooks() {
   return hooks;
 }
 
-module.exports = {
+export {
   createV1Hooks
 };
