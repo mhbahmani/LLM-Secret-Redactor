@@ -45,18 +45,19 @@ Terminal / User          Local tool execution
 
 1. **Secure-by-default UI**: Canonical user messages and tool results remain redacted. There is no automatic assistant-response unmasking.
 2. **Memory broker**: One automatically started broker per OS user holds mappings in RAM. Clients communicate over a mode-`0600` Unix socket inside a mode-`0700` runtime directory. No plaintext vault file is written.
-3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution so scripts and file reads work transparently.
-4. **Confirmed reveal**: Press the reveal shortcut, approve the confirmation, and OpenCode shows mappings in a local dialog for 10 seconds. Press it again to hide immediately.
-5. **Selection scope**: If terminal text is selected, only mask tokens inside that selection are revealed. A selection containing no tokens never falls back to revealing the whole session.
-6. **Session isolation**: Random 128-bit tokens and separate per-session maps prevent cross-session restoration. Sessions expire after inactivity and are cleared on supported session-end events.
+3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution, if the [restore policy](#restore-policy) allows that tool. OpenCode cannot prompt from a server hook, so tools set to `ask` (Bash by default) are refused there.
+4. **Unknown tokens are refused**: A tool call that references tokens the session cannot resolve (expired, broker restarted, or from another session) fails instead of writing literal mask tokens to disk.
+5. **Confirmed reveal**: Press the reveal shortcut, approve the confirmation, and OpenCode shows mappings in a local dialog for 10 seconds. Press it again to hide immediately.
+6. **Selection scope**: If terminal text is selected, only mask tokens inside that selection are revealed. A selection containing no tokens never falls back to revealing the whole session.
+7. **Session isolation**: Random 128-bit tokens and separate per-session maps prevent cross-session restoration. Sessions expire after inactivity and are cleared when OpenCode deletes the session.
 
 ### Claude Code Integration
 
-1. **Prompt Guard (`UserPromptSubmit`)**: Blocks prompt submission if raw secrets are typed directly.
-2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with random opaque tokens before sending to Claude.
+1. **Prompt Guard (`UserPromptSubmit`)**: Blocks prompt submission if raw secrets are typed directly. Claude Code hooks cannot rewrite a prompt, so unlike OpenCode the prompt is blocked rather than masked.
+2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with random opaque tokens before sending to Claude. If the broker is unavailable, secrets are replaced with irreversible `[REDACTED_<kind>]` markers instead of passing through.
 3. **Memory broker**: `SessionStart` starts or reuses the per-user broker; `SessionEnd` clears that session. No plaintext vault is written.
 4. **Terminal Unmasking (`MessageDisplay`)**: Restores original secrets in streamed responses so you read plain text.
-5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions so scripts and curl commands don't break.
+5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions, following the [restore policy](#restore-policy): file tools run directly, web tools are denied, and anything else (such as Bash) asks you first. Tokens the session cannot resolve are denied.
 
 ---
 
@@ -77,15 +78,37 @@ Both Claude Code and OpenCode consume the same shared pattern configuration in `
     "kind": "TOKEN"
   },
   {
-    "name": "URI with credentials",
-    "pattern": "([a-z0-9+.\\-]+://[^:\\s@/]+:)([^@\\s/]+)(@)",
+    "name": "Generic bearer token",
+    "pattern": "bearer\\s+([a-zA-Z0-9_\\-.]{20,})",
     "flags": "i",
-    "kind": "URI_PASS"
+    "kind": "BEARER_TOKEN"
   }
 ]
 ```
 
-To add custom patterns, modify or extend `patterns.json`. The shared broker loads this configuration for both clients.
+To add custom patterns, modify or extend `patterns.json`. The shared broker loads this configuration for both clients. A pattern without groups masks the whole match. With one group, only that group is masked; with two or more, group 2 is masked and the groups around it are kept as context.
+
+### Restore policy
+
+`policy.json` decides which tools may run with real values restored in place of mask tokens:
+
+```json
+{
+  "default": "ask",
+  "tools": {
+    "Read": "allow",
+    "Write": "allow",
+    "WebFetch": "deny",
+    "bash": "allow"
+  }
+}
+```
+
+- `allow`: restore silently.
+- `ask`: Claude Code asks you before the tool runs. OpenCode refuses, because its server hooks cannot prompt.
+- `deny`: refuse the tool call.
+
+Tool names are matched exactly, so list Claude Code names (`Bash`) and OpenCode names (`bash`) separately. Set `SECRET_REDACTOR_POLICY` to point the broker at a policy file outside the install directory, so reinstalling does not overwrite it.
 
 ---
 
@@ -95,6 +118,12 @@ Run interactive installer via curl:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/master/install.sh | bash
+```
+
+To install a specific tag or commit instead of `master`, set `SECRET_REDACTOR_REF` (or pass `--ref` to `install.py`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mhbahmani/llm-secret-redactor/<ref>/install.sh | SECRET_REDACTOR_REF=<ref> bash
 ```
 
 The installer is **fully idempotent** and interactively guides you through:
@@ -162,9 +191,10 @@ npm run test:all
 npm test
 
 # Run Python Claude Code tests
-python3 -m unittest discover tests
-python3 tests/test_lifecycle.py
+npm run test:python
 ```
+
+For manual testing, install into `test-project/` (ignored by git) and start the client from there, so the redactor does not run on this repository itself.
 
 ---
 
@@ -173,4 +203,4 @@ python3 tests/test_lifecycle.py
 - **OpenCode transcript limitation**: The public TUI API does not let plugins rewrite the built-in transcript in place. Confirmed plaintext therefore appears in a temporary local dialog; the stored transcript stays redacted.
 - **Platform support**: The broker requires Unix-domain sockets (Linux, macOS, or WSL). Native Windows is not currently supported.
 - **Threat model**: This removes plaintext-at-rest aggregation and restricts the socket to the current OS user. It does not protect against malware or an attacker already running code as that same user, who may inspect process memory or interact with the local socket.
-- **Claude display behavior**: Claude Code currently restores masked values through its local `MessageDisplay` hook. The confirmed, timed reveal command described above is OpenCode-specific.
+[- **Claude display behavior**: Claude Code currently restores masked values through its local `MessageDisplay` hook. The confirmed, timed reveal command described above is OpenCode-specific.
