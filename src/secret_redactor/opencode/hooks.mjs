@@ -1,6 +1,13 @@
 import { rawBrokerRequest, maskText, maskRecursive, clearSession } from "./vault.mjs";
 import { maskModelMessages } from "./transformer.mjs";
 
+function replaceContents(target, source) {
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) delete target[key];
+  }
+  Object.assign(target, source);
+}
+
 function requireSession(input) {
   if (!input?.sessionID) {
     throw new Error("secret-redactor: hook input has no session ID");
@@ -57,7 +64,9 @@ function createHooks() {
           "Set it to \"allow\" in the restore policy to permit this.",
         );
       }
-      output.args = response.value;
+      // OpenCode runs the tool with the args object it passed in, so replacing
+      // output.args has no effect; the original object must be updated.
+      replaceContents(output.args, response.value);
     },
 
     "tool.execute.after": async (input, output) => {

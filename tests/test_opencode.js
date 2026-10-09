@@ -400,3 +400,15 @@ test("Restore policy refuses tools that are not allowed", async () => {
     assert.ok(call.args.command.includes(token));
   }
 });
+
+test("Restored values reach the args object OpenCode executes", async () => {
+  const sessionID = "test-args-in-place";
+  const hooks = await plugin.server({});
+  const [masked] = await vault.maskText("DB_PASSWORD=hunter2hunter2", sessionID);
+
+  // OpenCode keeps its own reference to args and runs the tool with it.
+  const args = { filePath: ".env-2", content: masked };
+  await hooks["tool.execute.before"]({ tool: "write", sessionID, callID: "c-env2" }, { args });
+
+  assert.equal(args.content, "DB_PASSWORD=hunter2hunter2");
+});
