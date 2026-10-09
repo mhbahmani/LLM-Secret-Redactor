@@ -1,4 +1,5 @@
 import { createRevealController } from "./ui-reveal.mjs";
+import { toggleMasking } from "./masking-toggle.mjs";
 import * as vault from "./vault.mjs";
 
 function currentSessionID(context) {
@@ -19,6 +20,30 @@ function confirmDialog(api, selected, total) {
       message: selected === total
         ? `Reveal all ${total} session secrets for 10 seconds?`
         : `Reveal ${selected} secret${selected === 1 ? "" : "s"} from the selected text for 10 seconds?`,
+      onConfirm: () => {
+        finish(true);
+        api.ui.dialog.clear();
+      },
+      onCancel: () => {
+        finish(false);
+        api.ui.dialog.clear();
+      },
+    }), () => finish(false));
+  });
+}
+
+function confirmMaskingOff(api) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    api.ui.dialog.replace(() => api.ui.DialogConfirm({
+      title: "Turn off secret masking?",
+      message: "Messages and tool output in this session will reach the model unmasked, "
+        + "and OpenCode will save them unmasked. Turn it back on with the same command.",
       onConfirm: () => {
         finish(true);
         api.ui.dialog.clear();
@@ -55,6 +80,9 @@ const tui = async (api) => {
   const controller = createRevealController({ request: vault.rawBrokerRequest, timeoutMs: 10_000 });
   const revealDialog = { open: false };
   const configuredBindings = api.tuiConfig?.keybinds?.get?.("secret-redactor.ui.toggle") || [];
+  // No default shortcut for switching masking off; it lives in the palette
+  // unless the user binds it in tui.json.
+  const maskingBindings = api.tuiConfig?.keybinds?.get?.("secret-redactor.masking.toggle") || [];
 
   api.keymap.registerLayer({
     commands: [
@@ -85,12 +113,40 @@ const tui = async (api) => {
           });
         },
       },
+      {
+        name: "secret-redactor.masking.toggle",
+        title: "Turn secret masking off or on for this session",
+        category: "Secret Redactor",
+        namespace: "palette",
+        suggested: true,
+        run: async () => {
+          const sessionID = currentSessionID(api);
+          if (!sessionID) {
+            api.ui.toast({ message: "Open a session before changing secret masking", variant: "warning" });
+            return;
+          }
+          try {
+            await toggleMasking({
+              sessionID,
+              status: vault.maskingEnabled,
+              setMasking: vault.setMasking,
+              confirm: () => confirmMaskingOff(api),
+              notify: (message, variant) => api.ui.toast({ message, variant }),
+            });
+          } catch (error) {
+            api.ui.toast({ message: `Secret masking unchanged: ${error.message}`, variant: "error" });
+          }
+        },
+      },
     ],
-    bindings: configuredBindings.length ? configuredBindings : [{
+    bindings: [
+      ...(configuredBindings.length ? configuredBindings : [{
         key: "ctrl+shift+r",
         cmd: "secret-redactor.ui.toggle",
         desc: "Reveal or hide secrets",
-      }],
+      }]),
+      ...maskingBindings,
+    ],
   });
 
   api.lifecycle.onDispose(() => controller.hide());

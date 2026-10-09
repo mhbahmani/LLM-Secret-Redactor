@@ -142,5 +142,28 @@ test("TUI module registers the user-configured command binding", async () => {
   assert.equal(plugin.id, "secret-redactor.ui");
   assert.deepEqual(layer.bindings, [customBinding]);
   assert.equal(layer.commands[0].name, "secret-redactor.ui.toggle");
+  assert.equal(layer.commands[1].name, "secret-redactor.masking.toggle");
   assert.equal(typeof disposed, "function");
+});
+
+test("masking toggle asks before turning masking off", async () => {
+  const { toggleMasking } = await import("../src/secret_redactor/opencode/masking-toggle.mjs");
+  let enabled = true;
+  const notes = [];
+  const options = (approve) => ({
+    sessionID: "s",
+    status: async () => enabled,
+    setMasking: async (_sessionID, value) => { enabled = value; },
+    confirm: async () => approve,
+    notify: (message, variant) => notes.push(variant),
+  });
+
+  assert.deepEqual(await toggleMasking(options(false)), { status: "cancelled" });
+  assert.equal(enabled, true);
+  assert.deepEqual(await toggleMasking(options(true)), { status: "off" });
+  assert.equal(enabled, false);
+  // Turning it back on needs no confirmation.
+  assert.deepEqual(await toggleMasking(options(false)), { status: "on" });
+  assert.equal(enabled, true);
+  assert.deepEqual(notes, ["warning", "success"]);
 });

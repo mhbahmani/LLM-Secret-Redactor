@@ -42,6 +42,7 @@ OPENCODE_FILES = [
     ("opencode/plugin.mjs", "plugin.mjs"),
     ("opencode/tui.mjs", "tui.mjs"),
     ("opencode/ui-reveal.mjs", "ui-reveal.mjs"),
+    ("opencode/masking-toggle.mjs", "masking-toggle.mjs"),
     ("opencode/package.json", "package.json")
 ]
 

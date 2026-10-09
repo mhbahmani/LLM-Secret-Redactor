@@ -435,3 +435,19 @@ test("Restore policy is off by default, so bash receives real values", async () 
     fs.rmSync(runtimeDir, { recursive: true, force: true });
   }
 });
+
+test("Switching masking off stops OpenCode masking for that session only", async () => {
+  const hooks = await plugin.server({});
+  const secret = "ghp_123456789012345678901234567890123456";
+  await vault.setMasking("test-masking-off", false);
+  const off = { title: "", output: `token ${secret}`, metadata: {} };
+  await hooks["tool.execute.after"]({ tool: "bash", sessionID: "test-masking-off", callID: "1", args: {} }, off);
+  assert.ok(off.output.includes(secret));
+
+  const other = { title: "", output: `token ${secret}`, metadata: {} };
+  await hooks["tool.execute.after"]({ tool: "bash", sessionID: "test-masking-on", callID: "2", args: {} }, other);
+  assert.ok(!other.output.includes(secret));
+
+  await vault.setMasking("test-masking-off", true);
+  assert.equal(await vault.maskingEnabled("test-masking-off"), true);
+});
