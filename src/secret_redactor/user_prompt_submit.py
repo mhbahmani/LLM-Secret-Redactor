@@ -4,7 +4,16 @@ import json
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vault import SECRET_PATTERNS
+from vault import SECRET_PATTERNS, masking_enabled
+
+
+def masking_off(session_id):
+    """True only when the user switched masking off; any doubt keeps the guard on."""
+    try:
+        return session_id is not None and not masking_enabled(session_id)
+    except Exception:
+        return False
+
 
 def main():
     try:
@@ -14,6 +23,9 @@ def main():
 
         data = json.loads(raw_input)
         prompt = data.get("prompt", "")
+        if masking_off(data.get("session_id")):
+            print(json.dumps({}))
+            sys.exit(0)
 
         for regex, kind in SECRET_PATTERNS:
             if regex.search(prompt):

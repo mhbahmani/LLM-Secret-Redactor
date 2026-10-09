@@ -17,6 +17,9 @@ from secret_redactor.vault import (
     clear_session,
     broker_stats,
     shutdown_broker,
+    set_masking,
+    masking_enabled,
+    broker_request,
 )
 
 class TestVaultCore(unittest.TestCase):
@@ -109,6 +112,28 @@ class TestVaultCore(unittest.TestCase):
         self.assertTrue(changed)
         self.assertNotIn(secret, str(masked_data))
         self.assertEqual(unmask_recursive(masked_data, self.session_id)[0], data)
+
+    def test_masking_can_be_switched_off_per_session(self):
+        secret = "sk-proj-1234567890abcdef1234567890"
+        masked, _ = mask_text(f"key {secret}", self.session_id)
+        token = masked.split()[-1]
+
+        self.assertTrue(masking_enabled(self.session_id))
+        self.assertFalse(set_masking(self.session_id, False))
+        self.assertFalse(masking_enabled(self.session_id))
+        self.assertEqual(mask_text(f"key {secret}", self.session_id)[0], f"key {secret}")
+        # Tokens handed out earlier still restore.
+        self.assertEqual(unmask_text(token, self.session_id), secret)
+        # Other sessions are unaffected.
+        self.assertTrue(masking_enabled("another-session"))
+        self.assertNotIn(secret, mask_text(f"key {secret}", "another-session")[0])
+
+        set_masking(self.session_id, True)
+        self.assertNotIn(secret, mask_text(f"key {secret}", self.session_id)[0])
+
+    def test_set_masking_requires_a_boolean(self):
+        with self.assertRaises(RuntimeError):
+            broker_request("set_masking", self.session_id, enabled="off")
 
     def test_single_broker_process_is_reused(self):
         first = broker_stats()["pid"]

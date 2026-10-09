@@ -162,6 +162,16 @@ async function unmaskRecursive(value, sessionID) {
   return [response.value, Boolean(response.changed)];
 }
 
+async function setMasking(sessionID, enabled) {
+  const response = await rawBrokerRequest({ operation: "set_masking", session: sessionID, enabled });
+  return response.masking;
+}
+
+async function maskingEnabled(sessionID) {
+  const response = await rawBrokerRequest({ operation: "status", session: sessionID });
+  return response.masking;
+}
+
 async function clearSession(sessionID) {
   return brokerRequest("clear", sessionID);
 }
@@ -194,6 +204,8 @@ export {
   maskRecursive,
   unmaskRecursive,
   clearSession,
+  setMasking,
+  maskingEnabled,
   brokerStats,
   shutdownBroker,
 };

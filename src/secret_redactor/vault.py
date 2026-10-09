@@ -118,6 +118,14 @@ def restore_tool_input(tool_input: Any, session_id: str, tool: str) -> Dict[str,
     return broker_request("unmask", session_id, tool_input, tool=tool)
 
 
+def set_masking(session_id: str, enabled: bool) -> bool:
+    return broker_request("set_masking", session_id, enabled=enabled)["masking"]
+
+
+def masking_enabled(session_id: str) -> bool:
+    return broker_request("status", session_id)["masking"]
+
+
 def clear_session(session_id: str):
     broker_request("clear", session_id)
 

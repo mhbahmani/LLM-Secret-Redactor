@@ -86,6 +86,9 @@ class SessionVault:
     def __init__(self):
         self.token_to_secret = {}
         self.secret_to_token = {}
+        # The user can switch masking off for one session. New and expired
+        # sessions always start with it on.
+        self.masking = True
         self.last_access = time.monotonic()
 
     def touch(self):
@@ -142,7 +145,7 @@ class BrokerState:
 
 
 STATE = BrokerState()
-SESSION_OPERATIONS = {"clear", "tokens", "reveal", "mask", "unmask"}
+SESSION_OPERATIONS = {"clear", "tokens", "reveal", "mask", "unmask", "set_masking", "status"}
 
 
 def mask_text(text, vault, mappings):
@@ -173,7 +176,16 @@ def handle_request(request):
             STATE.stopping = True
             return {"ok": True}
 
+        if operation == "set_masking":
+            enabled = request.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("set_masking requires \"enabled\": true or false")
+            STATE.session(session_id).masking = enabled
+            return {"ok": True, "masking": enabled}
+
         vault = STATE.session(session_id, create=operation == "mask")
+        if operation == "status":
+            return {"ok": True, "masking": vault is None or vault.masking}
         if operation == "tokens":
             tokens = [] if vault is None else sorted(vault.token_to_secret)
             return {"ok": True, "tokens": tokens}
@@ -191,8 +203,10 @@ def handle_request(request):
             vault.touch()
             return {"ok": True, "mappings": mappings}
         if operation == "mask":
-            mappings = {}
             original = request.get("value")
+            if not vault.masking:
+                return {"ok": True, "value": original, "changed": False, "mappings": {}, "masking": False}
+            mappings = {}
             transformed = transform_value(original, lambda text: mask_text(text, vault, mappings))
             return {"ok": True, "value": transformed, "changed": transformed != original, "mappings": mappings}
         if operation == "unmask":
