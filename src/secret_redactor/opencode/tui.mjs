@@ -80,8 +80,6 @@ const tui = async (api) => {
   const controller = createRevealController({ request: vault.rawBrokerRequest, timeoutMs: 10_000 });
   const revealDialog = { open: false };
   const configuredBindings = api.tuiConfig?.keybinds?.get?.("secret-redactor.ui.toggle") || [];
-  // No default shortcut for switching masking off; it lives in the palette
-  // unless the user binds it in tui.json.
   const maskingBindings = api.tuiConfig?.keybinds?.get?.("secret-redactor.masking.toggle") || [];
 
   api.keymap.registerLayer({
@@ -145,7 +143,12 @@ const tui = async (api) => {
         cmd: "secret-redactor.ui.toggle",
         desc: "Reveal or hide secrets",
       }]),
-      ...maskingBindings,
+      // A leader sequence works in every terminal; ctrl+shift+<letter> does not.
+      ...(maskingBindings.length ? maskingBindings : [{
+        key: "<leader>k",
+        cmd: "secret-redactor.masking.toggle",
+        desc: "Turn secret masking off or on",
+      }]),
     ],
   });
 

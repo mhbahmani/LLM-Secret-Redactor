@@ -30,6 +30,7 @@ class OpenCodeInstallerTests(unittest.TestCase):
                 tui_config["keybinds"][install.REVEAL_COMMAND],
                 install.DEFAULT_REVEAL_KEYBIND,
             )
+            self.assertEqual(tui_config["keybinds"][install.MASKING_COMMAND], "<leader>k")
             self.assertIn("./plugins/secret-redactor/tui.mjs", tui_config["plugin"])
 
     def test_uninstall_removes_legacy_registration_without_breaking_json(self):
@@ -61,6 +62,7 @@ class OpenCodeInstallerTests(unittest.TestCase):
                     "keybinds": {
                         "other.command": "ctrl+o",
                         install.REVEAL_COMMAND: "ctrl+shift+r",
+                        install.MASKING_COMMAND: "<leader>k",
                     },
                 }, handle)
 
@@ -101,12 +103,13 @@ class OpenCodeInstallerTests(unittest.TestCase):
 
     def test_parse_args_accepts_flags_or_command(self):
         self.assertEqual(
-            install.parse_args(["--install", "--opencode", "--local", "--reveal-keybind=ctrl+k"]),
-            ("install", "local", "opencode", "ctrl+k", None),
+            install.parse_args(["--install", "--opencode", "--local", "--reveal-keybind=ctrl+k",
+                                "--masking-keybind=<leader>m"]),
+            ("install", "local", "opencode", "ctrl+k", "<leader>m", None),
         )
         self.assertEqual(
             install.parse_args(["uninstall", "--client=CLAUDE", "--scope", "global", "--ref", "v1.2.0"]),
-            ("uninstall", "global", "claude", None, "v1.2.0"),
+            ("uninstall", "global", "claude", None, None, "v1.2.0"),
         )
 
     def test_claude_install_adds_redact_command(self):

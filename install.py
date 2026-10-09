@@ -11,6 +11,10 @@ from datetime import datetime
 APP_NAME = "secret-redactor"
 REVEAL_COMMAND = "secret-redactor.ui.toggle"
 DEFAULT_REVEAL_KEYBIND = "ctrl+shift+r"
+MASKING_COMMAND = "secret-redactor.masking.toggle"
+# A leader sequence (ctrl+x, then k) works in every terminal, unlike
+# ctrl+shift+<letter>, which many terminals report as ctrl+<letter>.
+DEFAULT_MASKING_KEYBIND = "<leader>k"
 
 CLAUDE_FILES = [
     ("broker.py", "broker.py"),
@@ -421,7 +425,7 @@ def opencode_tui_config_path(chosen_dir):
         return os.path.abspath(os.path.expanduser(override))
     return os.path.join(chosen_dir, "tui.json")
 
-def update_opencode_tui_config(chosen_dir, keybind):
+def update_opencode_tui_config(chosen_dir, keybind, masking_keybind=DEFAULT_MASKING_KEYBIND):
     config_file = opencode_tui_config_path(chosen_dir)
     config = {}
     if os.path.isfile(config_file):
@@ -434,9 +438,10 @@ def update_opencode_tui_config(chosen_dir, keybind):
     if plugin_entry not in plugins:
         plugins.append(plugin_entry)
         changed = True
-    if keybinds.get(REVEAL_COMMAND) != keybind:
-        keybinds[REVEAL_COMMAND] = keybind
-        changed = True
+    for command, value in ((REVEAL_COMMAND, keybind), (MASKING_COMMAND, masking_keybind)):
+        if keybinds.get(command) != value:
+            keybinds[command] = value
+            changed = True
     if not changed:
         return
     if os.path.isfile(config_file):
@@ -448,7 +453,7 @@ def update_opencode_tui_config(chosen_dir, keybind):
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
-    print(f"Configured OpenCode reveal UI and keybinding {keybind!r} in {config_file}")
+    print(f"Configured OpenCode reveal UI ({keybind!r}) and masking toggle ({masking_keybind!r}) in {config_file}")
 
 def remove_opencode_tui_config(chosen_dir):
     config_file = opencode_tui_config_path(chosen_dir)
@@ -460,9 +465,10 @@ def remove_opencode_tui_config(chosen_dir):
     plugins = config.get("plugin", [])
     plugin_entry = f"./plugins/{APP_NAME}/tui.mjs"
     changed = False
-    if REVEAL_COMMAND in keybinds:
-        del keybinds[REVEAL_COMMAND]
-        changed = True
+    for command in (REVEAL_COMMAND, MASKING_COMMAND):
+        if command in keybinds:
+            del keybinds[command]
+            changed = True
     if plugin_entry in plugins:
         config["plugin"] = [entry for entry in plugins if entry != plugin_entry]
         changed = True
@@ -511,7 +517,8 @@ def do_uninstall_opencode(chosen_dir, is_global):
     if os.path.isdir(parent_plugins) and not os.listdir(parent_plugins):
         os.rmdir(parent_plugins)
 
-def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DEFAULT_REVEAL_KEYBIND):
+def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DEFAULT_REVEAL_KEYBIND,
+                        masking_keybind=DEFAULT_MASKING_KEYBIND):
     plugins_dir = os.path.join(chosen_dir, "plugins", APP_NAME)
 
     print(f"\nInstalling OpenCode plugin into {plugins_dir}...")
@@ -525,7 +532,7 @@ def do_install_opencode(chosen_dir, is_global, local_repo_dir, reveal_keybind=DE
     # Registering the nested implementation in opencode.json as well would load
     # the redactor twice, so the top-level trampoline is the only entry point.
 
-    update_opencode_tui_config(chosen_dir, reveal_keybind)
+    update_opencode_tui_config(chosen_dir, reveal_keybind, masking_keybind)
 
     print(f"✓ OpenCode plugin installed in {plugins_dir}")
 
@@ -548,13 +555,16 @@ def parse_args(argv=None):
     client.add_argument("--opencode", dest="client", action="store_const", const="opencode")
     client.add_argument("--client", choices=["all", "claude", "opencode"], type=str.lower)
     parser.add_argument("--reveal-keybind", help=f"OpenCode reveal shortcut (default {DEFAULT_REVEAL_KEYBIND})")
+    parser.add_argument("--masking-keybind",
+                        help=f"OpenCode shortcut to switch masking off or on (default {DEFAULT_MASKING_KEYBIND})")
     parser.add_argument("--ref", help="git tag or commit to download files from (default: master)")
     args = parser.parse_args(argv)
-    return args.action or args.command, args.scope, args.client, args.reveal_keybind, args.ref
+    return (args.action or args.command, args.scope, args.client,
+            args.reveal_keybind, args.masking_keybind, args.ref)
 
 def main():
     global REPO_RAW_URL
-    cli_action, cli_scope, cli_client, cli_reveal_keybind, cli_ref = parse_args()
+    cli_action, cli_scope, cli_client, cli_reveal_keybind, cli_masking_keybind, cli_ref = parse_args()
     if cli_ref:
         REPO_RAW_URL = f"{REPO_RAW_BASE}/{cli_ref}"
 
@@ -614,12 +624,17 @@ def main():
     if client in ("opencode", "all"):
         if action == "install" and cli_reveal_keybind is None:
             reveal_keybind = prompt_input("OpenCode reveal keybinding", DEFAULT_REVEAL_KEYBIND)
+    masking_keybind = cli_masking_keybind or DEFAULT_MASKING_KEYBIND
+    if client in ("opencode", "all"):
+        if action == "install" and cli_masking_keybind is None:
+            masking_keybind = prompt_input("OpenCode masking toggle keybinding", DEFAULT_MASKING_KEYBIND)
 
     print(f"\nSelected action: {action.upper()}")
     print(f"Selected client: {client.upper()}")
     print(f"Selected scope:  {scope.capitalize()}")
     if client in ("opencode", "all"):
         print(f"Reveal keybind:   {reveal_keybind}")
+        print(f"Masking keybind:  {masking_keybind}")
 
     # Paths
     if client in ("claude", "all"):
@@ -646,7 +661,7 @@ def main():
         if action == "uninstall":
             do_uninstall_opencode(chosen_opencode_dir, is_global)
         else:
-            do_install_opencode(chosen_opencode_dir, is_global, caller_dir, reveal_keybind)
+            do_install_opencode(chosen_opencode_dir, is_global, caller_dir, reveal_keybind, masking_keybind)
 
     print("\n==========================================")
     print(f"✓ {action.capitalize()} completed successfully!")

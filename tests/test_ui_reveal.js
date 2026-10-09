@@ -140,9 +140,10 @@ test("TUI module registers the user-configured command binding", async () => {
 
   await plugin.tui(api);
   assert.equal(plugin.id, "secret-redactor.ui");
-  assert.deepEqual(layer.bindings, [customBinding]);
+  assert.deepEqual(layer.bindings.filter((binding) => binding.cmd === "secret-redactor.ui.toggle"), [customBinding]);
   assert.equal(layer.commands[0].name, "secret-redactor.ui.toggle");
   assert.equal(layer.commands[1].name, "secret-redactor.masking.toggle");
+  assert.ok(layer.bindings.some((binding) => binding.cmd === "secret-redactor.masking.toggle" && binding.key === "<leader>k"));
   assert.equal(typeof disposed, "function");
 });
 
