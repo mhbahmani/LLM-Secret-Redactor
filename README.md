@@ -10,7 +10,7 @@ Prevents sensitive credentials (API keys, passwords, database URIs, bearer token
 
 ## Supported Clients
 
-- **Claude Code**: Uses native lifecycle hooks (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PostToolUse`, `PreToolUse`, `MessageDisplay`).
+- **Claude Code**: Uses native lifecycle hooks (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `UserPromptExpansion`, `PostToolUse`, `PreToolUse`, `MessageDisplay`).
 - **OpenCode**: Uses server hooks for redaction and tool restoration, plus a local TUI command for confirmed reveal.
 
 ---
@@ -87,6 +87,17 @@ Both Claude Code and OpenCode consume the same shared pattern configuration in `
 ```
 
 To add custom patterns, modify or extend `patterns.json`. The shared broker loads this configuration for both clients. A pattern without groups masks the whole match. With one group, only that group is masked; with two or more, group 2 is masked and the groups around it are kept as context.
+
+### Turning masking off for a session
+
+Sometimes you want the model to see real values, for example while debugging a config. Masking can be switched off for the current session only:
+
+- **Claude Code**: type `/redact off`, `/redact on`, or `/redact status`.
+- **OpenCode**: open the command palette and run "Turn secret masking off or on for this session". It asks for confirmation before turning masking off. To give it a shortcut, add `"secret-redactor.masking.toggle": "<keys>"` under `keybinds` in `tui.json`.
+
+While masking is off, tool output and messages reach the model unmasked, and secrets typed into Claude Code prompts are no longer blocked. OpenCode also saves that content unmasked in its session history. Tokens handed out earlier keep working. Masking is back on in every new session, and after the broker restarts.
+
+Only you can flip the switch: Claude Code runs the `/redact` hook only for commands you type (the model cannot invoke it), and the OpenCode command lives in the palette. A process running as your user, including a command the model runs, could still change it by talking to the broker socket directly, so treat it as a convenience switch rather than a security boundary.
 
 ### Restore policy
 
