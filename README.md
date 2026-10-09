@@ -93,7 +93,7 @@ To add custom patterns, modify or extend `patterns.json`. The shared broker load
 Sometimes you want the model to see real values, for example while debugging a config. Masking can be switched off for the current session only:
 
 - **Claude Code**: type `/redact off`, `/redact on`, or `/redact status`.
-- **OpenCode**: open the command palette and run "Turn secret masking off or on for this session". It asks for confirmation before turning masking off. To give it a shortcut, add `"secret-redactor.masking.toggle": "<keys>"` under `keybinds` in `tui.json`.
+- **OpenCode**: press `ctrl+x` then `k`, or run "Turn secret masking off or on for this session" from the command palette. It asks for confirmation before turning masking off, and a notification shows the new state either way. To change the shortcut, edit `keybinds.secret-redactor.masking.toggle` in `tui.json` or pass `--masking-keybind` to the installer.
 
 While masking is off, tool output and messages reach the model unmasked, and secrets typed into Claude Code prompts are no longer blocked. OpenCode also saves that content unmasked in its session history. Tokens handed out earlier keep working. Masking is back on in every new session, and after the broker restarts.
 
@@ -171,8 +171,8 @@ Bypass interactive prompts using flags:
 # Install only for OpenCode locally
 ./install.sh --install --opencode --local
 
-# Choose the OpenCode reveal shortcut during non-interactive installation
-./install.sh --install --opencode --local --reveal-keybind=ctrl+shift+r
+# Choose the OpenCode shortcuts during non-interactive installation
+./install.sh --install --opencode --local --reveal-keybind=ctrl+shift+r --masking-keybind='<leader>k'
 
 # Install only for Claude Code globally
 ./install.sh --install --claude --global
@@ -181,7 +181,7 @@ Bypass interactive prompts using flags:
 ./install.sh --uninstall --opencode --global
 ```
 
-The installer writes the shortcut under `keybinds.secret-redactor.ui.toggle` in the selected OpenCode `tui.json`. Change that value later to customize it. The default is `ctrl+shift+r`.
+The installer writes the shortcuts under `keybinds` in the selected OpenCode `tui.json`: `secret-redactor.ui.toggle` for reveal (default `ctrl+shift+r`) and `secret-redactor.masking.toggle` for switching masking (default `<leader>k`, i.e. `ctrl+x` then `k`). Change those values later to customize them.
 
 ---
 
