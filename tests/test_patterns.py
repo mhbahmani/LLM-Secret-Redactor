@@ -19,6 +19,10 @@ SECRETS = [
     ("ghp_123456789012345678901234567890123456", "ghp_123456789012345678901234567890123456"),
     ("AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
     ("secret: s3cr3t.v4lu3", "s3cr3t.v4lu3"),
+    ("DB_PASSWORD=jkfjwekr;jaksfjkdsfjdjf", "jkfjwekr;jaksfjkdsfjdjf"),
+    ("export API_TOKEN=abc,def;ghi{jkl}", "abc,def;ghi{jkl}"),
+    ('password = "pa;ss,wo}rd"', "pa;ss,wo}rd"),
+    ("api_key: 'k3y;with;semicolons'", "k3y;with;semicolons"),
 ]
 
 NOT_SECRETS = [
@@ -35,7 +39,16 @@ NOT_SECRETS = [
     "token = undefined",
     r'"pattern": "([a-z0-9+.\\-]+://[^:\\s@/]+:)([^@\\s/]+)(@)"',
     "postgres://${DB_USER}:${DB_PASS}@db/app",
+    'password: "${DB_PASSWORD}"',
+    'token = "Bearer " + access',
 ]
+
+
+def leaked_fragments(secret, masked, size=5):
+    """Pieces of the secret still visible, so partial masking is caught too."""
+    return {secret[i:i + size] for i in range(len(secret) - size + 1)} & {
+        masked[i:i + size] for i in range(len(masked) - size + 1)
+    }
 
 
 def mask(text):
@@ -46,7 +59,7 @@ class TestPatterns(unittest.TestCase):
     def test_secrets_are_masked(self):
         for text, secret in SECRETS:
             with self.subTest(text=text):
-                self.assertNotIn(secret, mask(text))
+                self.assertEqual(leaked_fragments(secret, mask(text)), set())
 
     def test_code_references_are_left_alone(self):
         for text in NOT_SECRETS:

@@ -31,7 +31,11 @@ def load_patterns(pattern_file=PATTERN_FILE):
         raw_patterns = json.load(handle)
     compiled = []
     for item in raw_patterns:
-        flags = re.IGNORECASE if "i" in item.get("flags", "") else 0
+        flags = 0
+        if "i" in item.get("flags", ""):
+            flags |= re.IGNORECASE
+        if "m" in item.get("flags", ""):
+            flags |= re.MULTILINE
         compiled.append((re.compile(item["pattern"], flags), item["kind"]))
     return compiled
 

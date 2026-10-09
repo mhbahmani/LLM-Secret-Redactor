@@ -32,8 +32,20 @@
     "kind": "URI_PASS"
   },
   {
+    "name": "Env-style assignment",
+    "pattern": "^(\\s*(?:export\\s+)?[A-Za-z0-9_.-]*(?:password|passwd|secret|api[_-]?key|token|auth_token)=)([^\\s\\\"'#][^\\s#]{5,})",
+    "flags": "im",
+    "kind": "KV_SECRET"
+  },
+  {
+    "name": "Quoted key-value secret",
+    "pattern": "([\\\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\\\"']?\\s*[:=]\\s*[\\\"'])([^\\\"'\\s][^\\\"'\\n]{4,}[^\\\"'\\s])(?=[\\\"'])",
+    "flags": "i",
+    "kind": "KV_SECRET"
+  },
+  {
     "name": "Key-value secrets",
-    "pattern": "([\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\"']?\\s*[:=]\\s*[\"']?)([^\\s\"',;{}()<>\\[\\]]{6,})(?![\\w.(\\[])([\"']?)",
+    "pattern": "([\\\"']?(?:password|passwd|secret|api[_-]?key|token|auth_token)[\\\"']?\\s*[:=]\\s*)([^\\s\\\"',;{}()<>\\[\\]]{6,})(?![\\w.(\\[])",
     "flags": "i",
     "kind": "KV_SECRET"
   },
