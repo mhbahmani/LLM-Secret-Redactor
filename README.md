@@ -46,7 +46,7 @@ Terminal / User          Local tool execution
 1. **Secure-by-default UI**: Canonical user messages and tool results remain redacted. There is no automatic assistant-response unmasking.
 2. **Memory broker**: One automatically started broker per OS user holds mappings in RAM. Clients communicate over a mode-`0600` Unix socket inside a mode-`0700` runtime directory. No plaintext vault file is written.
 3. **Tool Argument Restoration**: When the model issues a tool call containing masked values (e.g. `read("/home/__MASKED_USER_...__/config.json")`), arguments are recursively unmasked before local execution, if the [restore policy](#restore-policy) allows that tool. OpenCode cannot prompt from a server hook, so tools set to `ask` (Bash by default) are refused there.
-4. **Unknown tokens are refused**: A tool call that references tokens the session cannot resolve (expired, broker restarted, or from another session) fails instead of writing literal mask tokens to disk.
+4. **Unknown tokens pass through**: Tokens the session cannot resolve (expired, broker restarted, or from another session) are left as literal text, and the tool runs with them.
 5. **Confirmed reveal**: Press the reveal shortcut, approve the confirmation, and OpenCode shows mappings in a local dialog for 10 seconds. Press it again to hide immediately.
 6. **Selection scope**: If terminal text is selected, only mask tokens inside that selection are revealed. A selection containing no tokens never falls back to revealing the whole session.
 7. **Session isolation**: Random 128-bit tokens and separate per-session maps prevent cross-session restoration. Sessions expire after inactivity and are cleared when OpenCode deletes the session.
@@ -57,7 +57,7 @@ Terminal / User          Local tool execution
 2. **Data Redaction (`PostToolUse`)**: Replaces secrets in tool outputs (files, commands, logs) with random opaque tokens before sending to Claude. If the broker is unavailable, secrets are replaced with irreversible `[REDACTED_<kind>]` markers instead of passing through.
 3. **Memory broker**: `SessionStart` starts or reuses the per-user broker; `SessionEnd` clears that session. No plaintext vault is written.
 4. **Terminal Unmasking (`MessageDisplay`)**: Restores original secrets in streamed responses so you read plain text.
-5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions, following the [restore policy](#restore-policy): file tools run directly, web tools are denied, and anything else (such as Bash) asks you first. Tokens the session cannot resolve are denied.
+5. **Tool Unmasking (`PreToolUse`)**: Unmasks tokens before subsequent tool executions, following the [restore policy](#restore-policy): file tools run directly, web tools are denied, and anything else (such as Bash) asks you first. Tokens the session cannot resolve are left unchanged.
 
 ---
 
