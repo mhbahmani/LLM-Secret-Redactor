@@ -7,6 +7,8 @@ const os = require("node:os");
 const TEST_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-opencode-"));
 process.env.SECRET_REDACTOR_RUNTIME_DIR = TEST_RUNTIME_DIR;
 process.env.SECRET_REDACTOR_BROKER_IDLE = "10";
+// The restore policy ships switched off; these tests exercise it switched on.
+process.env.SECRET_REDACTOR_POLICY = path.join(__dirname, "fixtures", "policy-enabled.json");
 
 let vault, plugin, createHooks;
 test.before(async () => {
@@ -408,4 +410,28 @@ test("Restored values reach the args object OpenCode executes", async () => {
   await hooks["tool.execute.before"]({ tool: "write", sessionID, callID: "c-env2" }, { args });
 
   assert.equal(args.content, "DB_PASSWORD=hunter2hunter2");
+});
+
+test("Restore policy is off by default, so bash receives real values", async () => {
+  const { spawnSync } = require("node:child_process");
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "llm-redactor-policy-off-"));
+  const script = `
+    const { default: plugin } = await import(${JSON.stringify(path.resolve(__dirname, "../src/secret_redactor/opencode/plugin.mjs"))});
+    const vault = await import(${JSON.stringify(path.resolve(__dirname, "../src/secret_redactor/vault.mjs"))});
+    const hooks = await plugin.server({});
+    const [masked] = await vault.maskText("DB_PASSWORD=hunter2hunter2", "s");
+    const args = { command: "psql " + masked };
+    await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s", callID: "1" }, { args });
+    console.log(args.command);
+    await vault.shutdownBroker();
+  `;
+  const env = { ...process.env, SECRET_REDACTOR_RUNTIME_DIR: runtimeDir };
+  delete env.SECRET_REDACTOR_POLICY;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf-8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "psql DB_PASSWORD=hunter2hunter2");
+  } finally {
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+  }
 });

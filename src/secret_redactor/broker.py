@@ -56,14 +56,17 @@ DECISIONS = {"allow", "ask", "deny"}
 
 
 def load_policy(path=None):
-    """Per-tool decision for running a tool with restored secret values."""
+    """Per-tool decision for running a tool with restored secret values.
+    While "enabled" is false, every tool receives restored values."""
     path = path or os.environ.get("SECRET_REDACTOR_POLICY") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "policy.json"
     )
-    policy = {"default": "ask", "tools": {}}
+    policy = {"enabled": False, "default": "ask", "tools": {}}
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as handle:
             policy.update(json.load(handle))
+    if not isinstance(policy["enabled"], bool):
+        raise ValueError(f"Restore policy \"enabled\" must be true or false: {path}")
     values = [policy["default"], *policy["tools"].values()]
     if any(value not in DECISIONS for value in values):
         raise ValueError(f"Restore policy values must be one of {sorted(DECISIONS)}: {path}")
@@ -71,6 +74,8 @@ def load_policy(path=None):
 
 
 def restore_decision(policy, tool):
+    if not policy["enabled"]:
+        return "allow"
     return policy["tools"].get(tool, policy["default"])
 
 

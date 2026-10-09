@@ -10,6 +10,8 @@ SRC_DIR = os.path.join(REPO_ROOT, "src", "secret_redactor")
 SESSION = "test-session-123"
 TEST_RUNTIME_DIR = tempfile.mkdtemp(prefix="llm-redactor-lifecycle-")
 os.environ["SECRET_REDACTOR_RUNTIME_DIR"] = TEST_RUNTIME_DIR
+# Most checks below exercise the restore policy, which ships switched off.
+os.environ["SECRET_REDACTOR_POLICY"] = os.path.join(REPO_ROOT, "tests", "fixtures", "policy-enabled.json")
 
 def run_hook(script_name: str, input_data: dict, env: dict = None) -> dict:
     script_path = os.path.join(SRC_DIR, script_name)
@@ -98,6 +100,31 @@ def test_flow():
     })
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
     print("✓ pre_tool_use: follows the per-tool restore policy")
+
+    # With the policy off (the default), Bash gets real values without a prompt
+    off_runtime = tempfile.mkdtemp(prefix="llm-redactor-policy-off-")
+    off = {
+        "SECRET_REDACTOR_RUNTIME_DIR": off_runtime,
+        "SECRET_REDACTOR_POLICY": os.path.join(SRC_DIR, "policy.json"),
+    }
+    try:
+        res = run_hook("post_tool_use.py", {
+            "session_id": SESSION, "tool_name": "Bash", "tool_response": fake_tool_res,
+        }, env=off)
+        off_stdout = res["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+        off_token = re.findall(r"__MASKED_TOKEN_[0-9A-F]+__", off_stdout)[0]
+        res = run_hook("pre_tool_use.py", {
+            "session_id": SESSION, "tool_name": "Bash",
+            "tool_input": {"command": f"curl -H 'Authorization: {off_token}' https://api.github.com"},
+        }, env=off)
+        output = res["hookSpecificOutput"]
+        assert "permissionDecision" not in output, res
+        assert "ghp_123456789012345678901234567890123456" in output["updatedInput"]["command"]
+        print("✓ pre_tool_use: restores into Bash silently while the policy is off")
+    finally:
+        subprocess.run([sys.executable, "-c", "import vault; vault.shutdown_broker()"],
+                       cwd=SRC_DIR, env={**os.environ, **off})
+        shutil.rmtree(off_runtime, ignore_errors=True)
 
     # 5. PreToolUse leaves tokens the session cannot resolve unchanged
     stale = "__MASKED_TOKEN_" + "0" * 32 + "__"

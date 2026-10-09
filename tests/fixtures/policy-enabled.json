@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "default": "ask",
   "tools": {
     "Read": "allow",
