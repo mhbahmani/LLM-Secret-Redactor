@@ -10,10 +10,10 @@ from typing import Any, Dict, Tuple
 
 
 DEFAULT_PATTERNS = [
-    {"name": "Anthropic key", "pattern": r"sk-ant-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
-    {"name": "OpenAI key", "pattern": r"sk-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
-    {"name": "GitHub Token", "pattern": r"gh[pousr]_[a-zA-Z0-9]{36,}", "kind": "TOKEN"},
-    {"name": "AWS Access Key ID", "pattern": r"(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", "kind": "AWS_KEY"},
+    {"name": "Anthropic key", "pattern": r"(?<![A-Za-z0-9_])sk-ant-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
+    {"name": "OpenAI key", "pattern": r"(?<![A-Za-z0-9_])sk-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
+    {"name": "GitHub Token", "pattern": r"(?<![A-Za-z0-9_])gh[pousr]_[a-zA-Z0-9]{36,}", "kind": "TOKEN"},
+    {"name": "AWS Access Key ID", "pattern": r"(?<![A-Za-z0-9_])(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])", "kind": "AWS_KEY"},
     {"name": "Generic bearer token", "pattern": r"bearer\s+([a-zA-Z0-9_\-\.]{20,})", "flags": "i", "kind": "BEARER_TOKEN"},
     {"name": "URI with credentials", "pattern": r"([a-z0-9+.\-]+://[^:\s@/]+:)([^@\s/]+)(@)", "flags": "i", "kind": "URI_PASS"},
     {"name": "Key-value secrets", "pattern": r"""(["']?(?:password|passwd|secret|api[_-]?key|token|auth_token)["']?\s*[:=]\s*["']?)([^\s"',;}{]{6,})(["']?)""", "flags": "i", "kind": "KV_SECRET"},
