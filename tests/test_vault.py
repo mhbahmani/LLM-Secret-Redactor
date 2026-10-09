@@ -114,7 +114,8 @@ class TestVaultCore(unittest.TestCase):
         first = broker_stats()["pid"]
         second = broker_stats()["pid"]
         self.assertEqual(first, second)
-        self.assertEqual(os.listdir(TEST_RUNTIME_DIR), ["broker.sock"])
+        self.assertEqual(sorted(os.listdir(TEST_RUNTIME_DIR)), ["broker.lock", "broker.sock"])
+        self.assertEqual(os.path.getsize(os.path.join(TEST_RUNTIME_DIR, "broker.lock")), 0)
 
 if __name__ == "__main__":
     unittest.main()

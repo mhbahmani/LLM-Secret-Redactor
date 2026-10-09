@@ -2,6 +2,7 @@
 """Per-user, memory-only secret broker for Claude Code and OpenCode hooks."""
 
 import argparse
+import fcntl
 import json
 import os
 import secrets
@@ -246,23 +247,39 @@ class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
-def active_broker(path):
+def acquire_instance_lock(directory):
+    """Hold an exclusive lock for the broker's lifetime. The kernel releases it
+    when the process dies, so a second broker can never replace a live one,
+    even if the live one is too busy to answer for a while."""
+    fd = os.open(os.path.join(directory, "broker.lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(0.2)
-            client.connect(path)
-            client.sendall(b'{"operation":"ping"}\n')
-            return bool(client.recv(256))
-    except OSError:
-        return False
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def run_janitor():
+    """Expire idle sessions, then stop once the broker has had none for a while.
+    Runs off the accept loop so a long mask request never blocks new clients."""
+    while not STATE.stopping:
+        time.sleep(1)
+        with STATE.lock:
+            STATE.expire()
+            if not STATE.sessions and time.monotonic() - STATE.empty_since >= EMPTY_IDLE_SECONDS:
+                STATE.stopping = True
 
 
 def serve():
-    ensure_runtime_dir()
+    directory = ensure_runtime_dir()
+    lock_fd = acquire_instance_lock(directory)
+    if lock_fd is None:
+        return 0
+
+    # Holding the lock means any existing socket is stale.
     path = socket_path()
     if os.path.lexists(path):
-        if active_broker(path):
-            return 0
         info = os.lstat(path)
         if info.st_uid != os.getuid() or not stat.S_ISSOCK(info.st_mode):
             raise RuntimeError(f"Unsafe existing broker socket: {path}")
@@ -277,17 +294,16 @@ def serve():
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    threading.Thread(target=run_janitor, daemon=True).start()
     try:
         while not STATE.stopping:
             server.handle_request()
-            with STATE.lock:
-                STATE.expire()
-                if not STATE.sessions and time.monotonic() - STATE.empty_since >= EMPTY_IDLE_SECONDS:
-                    break
     finally:
         server.server_close()
+        # Safe while the lock is held: no other broker can own this path.
         if os.path.lexists(path):
             os.unlink(path)
+        os.close(lock_fd)
     return 0
 
 

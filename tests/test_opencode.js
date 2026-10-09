@@ -160,7 +160,8 @@ test("Broker socket is private and no plaintext vault file is created", async ()
 
   assert.equal(fs.statSync(TEST_RUNTIME_DIR).mode & 0o777, 0o700);
   assert.equal(fs.statSync(vault.getSocketPath()).mode & 0o777, 0o600);
-  assert.deepEqual(fs.readdirSync(TEST_RUNTIME_DIR), ["broker.sock"]);
+  assert.deepEqual(fs.readdirSync(TEST_RUNTIME_DIR).sort(), ["broker.lock", "broker.sock"]);
+  assert.equal(fs.statSync(path.join(TEST_RUNTIME_DIR, "broker.lock")).size, 0);
 });
 
 test("Concurrent clients reuse one broker process", async () => {
