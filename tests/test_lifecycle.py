@@ -2,10 +2,14 @@ import json
 import subprocess
 import os
 import sys
+import tempfile
+import shutil
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(REPO_ROOT, "src", "secret_redactor")
 SESSION = "test-session-123"
+TEST_RUNTIME_DIR = tempfile.mkdtemp(prefix="llm-redactor-lifecycle-")
+os.environ["SECRET_REDACTOR_RUNTIME_DIR"] = TEST_RUNTIME_DIR
 
 def run_hook(script_name: str, input_data: dict) -> dict:
     script_path = os.path.join(SRC_DIR, script_name)
@@ -65,7 +69,7 @@ def test_flow():
     print("✓ message_display: successfully restored real secrets for terminal display")
 
     # 4. PreToolUse unmasks token if Claude sends it back into a tool
-    gh_token = [t for t in tokens if "GITHUB_TOKEN" in t][0]
+    gh_token = [t for t in tokens if "TOKEN" in t][0]
     res = run_hook("pre_tool_use.py", {
         "session_id": SESSION,
         "hook_event_name": "PreToolUse",
@@ -79,4 +83,10 @@ def test_flow():
     print("\nALL LIFECYCLE TESTS PASSED.")
 
 if __name__ == "__main__":
-    test_flow()
+    try:
+        test_flow()
+    finally:
+        sys.path.insert(0, SRC_DIR)
+        from vault import shutdown_broker
+        shutdown_broker()
+        shutil.rmtree(TEST_RUNTIME_DIR, ignore_errors=True)

@@ -1,185 +1,177 @@
-import os
 import json
+import os
 import re
-import hashlib
-from typing import Tuple, Dict, Any
+import socket
+import stat
+import subprocess
+import sys
+import time
+from typing import Any, Dict, Tuple
 
-# Simple regexes for common secrets/tokens
-SECRET_PATTERNS = [
-    # OpenAI key
-    (re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"), "OPENAI_KEY"),
-    # GitHub Token
-    (re.compile(r"gh[pousr]_[a-zA-Z0-9]{36,}"), "GITHUB_TOKEN"),
-    # Anthropic key
-    (re.compile(r"sk-ant-[a-zA-Z0-9_\-]{20,}"), "ANTHROPIC_KEY"),
-    # AWS Access Key ID
-    (re.compile(r"(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"), "AWS_KEY"),
-    # Generic bearer token
-    (re.compile(r"(?i)bearer\s+([a-zA-Z0-9_\-\.]{20,})"), "BEARER_TOKEN"),
-    # URI with credentials (e.g. postgres://user:pass@host)
-    (re.compile(r"""(?i)([a-z0-9+.\-]+://[^:\s@/]+:)([^@\s/]+)(@)"""), "URI_PASS"),
-    # Key-value secrets (password, secret, token, api_key)
-    (re.compile(r"""(?i)(["']?(?:password|passwd|secret|api[_-]?key|token|auth_token)["']?\s*[:=]\s*["']?)([^\s"',;}{]{6,})(["']?)"""), "KV_SECRET"),
-    # JWT token pattern
-    (re.compile(r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}"), "JWT_TOKEN"),
+
+DEFAULT_PATTERNS = [
+    {"name": "Anthropic key", "pattern": r"sk-ant-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
+    {"name": "OpenAI key", "pattern": r"sk-[a-zA-Z0-9_\-]{20,}", "kind": "TOKEN"},
+    {"name": "GitHub Token", "pattern": r"gh[pousr]_[a-zA-Z0-9]{36,}", "kind": "TOKEN"},
+    {"name": "AWS Access Key ID", "pattern": r"(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", "kind": "AWS_KEY"},
+    {"name": "Generic bearer token", "pattern": r"bearer\s+([a-zA-Z0-9_\-\.]{20,})", "flags": "i", "kind": "BEARER_TOKEN"},
+    {"name": "URI with credentials", "pattern": r"([a-z0-9+.\-]+://[^:\s@/]+:)([^@\s/]+)(@)", "flags": "i", "kind": "URI_PASS"},
+    {"name": "Key-value secrets", "pattern": r"""(["']?(?:password|passwd|secret|api[_-]?key|token|auth_token)["']?\s*[:=]\s*["']?)([^\s"',;}{]{6,})(["']?)""", "flags": "i", "kind": "KV_SECRET"},
+    {"name": "JWT token pattern", "pattern": r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}", "kind": "JWT_TOKEN"},
 ]
 
-VAULT_DIR = "/tmp/claude_secret_vault"
 
-def get_vault_path(session_id: str) -> str:
-    os.makedirs(VAULT_DIR, exist_ok=True)
-    safe_session = re.sub(r"[^a-zA-Z0-9_\-]", "_", session_id or "default")
-    return os.path.join(VAULT_DIR, f"vault_{safe_session}.json")
+def load_patterns():
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "patterns.json"),
+        os.path.join(os.getcwd(), "patterns.json"),
+    ]
+    raw_patterns = None
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as handle:
+                    raw_patterns = json.load(handle)
+                break
+            except Exception:
+                continue
+    compiled = []
+    for item in raw_patterns or DEFAULT_PATTERNS:
+        flags = re.IGNORECASE if "i" in item.get("flags", "") else 0
+        compiled.append((re.compile(item["pattern"], flags), item["kind"]))
+    return compiled
 
-def load_vault(session_id: str) -> Dict[str, str]:
-    path = get_vault_path(session_id)
-    if not os.path.exists(path):
-        return {}
+
+SECRET_PATTERNS = load_patterns()
+BROKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broker.py")
+_BROKER_PROCESS = None
+
+
+def get_runtime_dir() -> str:
+    override = os.environ.get("SECRET_REDACTOR_RUNTIME_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if base:
+        return os.path.join(base, "llm-secret-redactor")
+    return os.path.join("/tmp", f"llm-secret-redactor-{os.getuid()}")
+
+
+def get_socket_path() -> str:
+    return os.path.join(get_runtime_dir(), "broker.sock")
+
+
+def _ensure_runtime_dir():
+    directory = get_runtime_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    info = os.lstat(directory)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError(f"Unsafe broker runtime directory: {directory}")
+    os.chmod(directory, 0o700)
+
+
+def _send(request: Dict[str, Any]) -> Dict[str, Any]:
+    encoded = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(3)
+        client.connect(get_socket_path())
+        client.sendall(encoded)
+        chunks = bytearray()
+        while not chunks.endswith(b"\n"):
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.extend(chunk)
+            if len(chunks) > 16 * 1024 * 1024:
+                raise RuntimeError("Secret broker response exceeded size limit")
+    if not chunks:
+        raise RuntimeError("Secret broker returned an empty response")
+    response = json.loads(chunks)
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "Secret broker request failed"))
+    return response
+
+
+def _start_broker():
+    global _BROKER_PROCESS
+    if not os.path.isfile(BROKER_SCRIPT):
+        raise RuntimeError(f"Secret broker executable is missing: {BROKER_SCRIPT}")
+    _ensure_runtime_dir()
+    _BROKER_PROCESS = subprocess.Popen(
+        [sys.executable, BROKER_SCRIPT, "--serve"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 3
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            _send({"operation": "ping"})
+            return
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.025)
+    raise RuntimeError(f"Secret broker did not start: {last_error}")
+
+
+def broker_request(operation: str, session_id: str = "default", value: Any = None) -> Dict[str, Any]:
+    request = {"operation": operation, "session": session_id or "default"}
+    if value is not None:
+        request["value"] = value
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+        return _send(request)
+    except (FileNotFoundError, ConnectionRefusedError, socket.timeout, RuntimeError):
+        _start_broker()
+        return _send(request)
 
-def save_vault(session_id: str, vault: Dict[str, str]):
-    path = get_vault_path(session_id)
-    try:
-        temp_path = f"{path}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(vault, f, indent=2)
-        os.replace(temp_path, path)
-    except Exception:
-        pass
-
-def _make_token(prefix: str, secret: str) -> str:
-    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:8].upper()
-    return f"__MASKED_{prefix}_{digest}__"
 
 def mask_text(text: str, session_id: str) -> Tuple[str, Dict[str, str]]:
     if not isinstance(text, str) or not text:
         return text, {}
+    response = broker_request("mask", session_id, text)
+    return response["value"], response.get("mappings", {})
 
-    vault = load_vault(session_id)
-    updated = False
-
-    # 1. Check KV secrets
-    def kv_sub(m: re.Match) -> str:
-        nonlocal updated
-        prefix_chars, secret, suffix_chars = m.group(1), m.group(2), m.group(3)
-        # Avoid double masking existing masked tokens
-        if secret.startswith("__MASKED_") and secret.endswith("__"):
-            return m.group(0)
-        token = _make_token("SECRET", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"{prefix_chars}{token}{suffix_chars}"
-
-    # 2. Check URI password
-    def uri_sub(m: re.Match) -> str:
-        nonlocal updated
-        prefix, secret, suffix = m.group(1), m.group(2), m.group(3)
-        token = _make_token("URIPASS", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"{prefix}{token}{suffix}"
-
-    # 3. Check Bearer token
-    def bearer_sub(m: re.Match) -> str:
-        nonlocal updated
-        secret = m.group(1)
-        token = _make_token("BEARER", secret)
-        if vault.get(token) != secret:
-            vault[token] = secret
-            updated = True
-        return f"Bearer {token}"
-
-    # Standard patterns
-    for regex, kind in SECRET_PATTERNS:
-        if kind == "KV_SECRET":
-            text = regex.sub(kv_sub, text)
-        elif kind == "URI_PASS":
-            text = regex.sub(uri_sub, text)
-        elif kind == "BEARER_TOKEN":
-            text = regex.sub(bearer_sub, text)
-        else:
-            def std_sub(m: re.Match, kind=kind) -> str:
-                nonlocal updated
-                secret = m.group(0)
-                if secret.startswith("__MASKED_") and secret.endswith("__"):
-                    return secret
-                token = _make_token(kind, secret)
-                if vault.get(token) != secret:
-                    vault[token] = secret
-                    updated = True
-                return token
-            text = regex.sub(std_sub, text)
-
-    if updated:
-        save_vault(session_id, vault)
-
-    return text, vault
 
 def unmask_text(text: str, session_id: str) -> str:
     if not isinstance(text, str) or not text:
         return text
+    return broker_request("unmask", session_id, text)["value"]
 
-    vault = load_vault(session_id)
-    if not vault:
-        return text
-
-    # Sort tokens longest first to avoid partial collision
-    for token, secret in sorted(vault.items(), key=lambda x: len(x[0]), reverse=True):
-        if token in text:
-            text = text.replace(token, secret)
-
-    return text
 
 def mask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
-    if isinstance(obj, str):
-        masked, _ = mask_text(obj, session_id)
-        return masked, masked != obj
-    elif isinstance(obj, dict):
-        new_dict = {}
-        changed = False
-        for k, v in obj.items():
-            new_v, ch = mask_recursive(v, session_id)
-            new_dict[k] = new_v
-            if ch:
-                changed = True
-        return new_dict, changed
-    elif isinstance(obj, list):
-        new_list = []
-        changed = False
-        for item in obj:
-            new_item, ch = mask_recursive(item, session_id)
-            new_list.append(new_item)
-            if ch:
-                changed = True
-        return new_list, changed
-    return obj, False
+    response = broker_request("mask", session_id, obj)
+    return response["value"], bool(response.get("changed"))
+
 
 def unmask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
-    if isinstance(obj, str):
-        unmasked = unmask_text(obj, session_id)
-        return unmasked, unmasked != obj
-    elif isinstance(obj, dict):
-        new_dict = {}
-        changed = False
-        for k, v in obj.items():
-            new_v, ch = unmask_recursive(v, session_id)
-            new_dict[k] = new_v
-            if ch:
-                changed = True
-        return new_dict, changed
-    elif isinstance(obj, list):
-        new_list = []
-        changed = False
-        for item in obj:
-            new_item, ch = unmask_recursive(item, session_id)
-            new_list.append(new_item)
-            if ch:
-                changed = True
-        return new_list, changed
-    return obj, False
+    response = broker_request("unmask", session_id, obj)
+    return response["value"], bool(response.get("changed"))
+
+
+def clear_session(session_id: str):
+    broker_request("clear", session_id)
+
+
+def broker_stats():
+    return broker_request("stats")
+
+
+def shutdown_broker():
+    global _BROKER_PROCESS
+    try:
+        response = _send({"operation": "shutdown"})
+        if _BROKER_PROCESS is not None:
+            try:
+                _BROKER_PROCESS.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        _BROKER_PROCESS = None
+        deadline = time.monotonic() + 2
+        while os.path.lexists(get_socket_path()) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return response
+    except (OSError, RuntimeError):
+        return {"ok": True}
