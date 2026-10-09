@@ -270,11 +270,8 @@ test("Session isolation: sessions do not cross-unmask tokens", async () => {
     args: { key: tokenA }
   };
 
-  // Session B does not know tokenA, so the tool must not run with it.
-  await assert.rejects(
-    hooks["tool.execute.before"]({ tool: "test", sessionID: sessionB, callID: "c-3" }, toolInputB),
-    /unknown to this session/,
-  );
+  // Session B does not know tokenA, so the tool runs with it unchanged.
+  await hooks["tool.execute.before"]({ tool: "test", sessionID: sessionB, callID: "c-3" }, toolInputB);
   assert.equal(toolInputB.args.key, tokenA);
 });
 

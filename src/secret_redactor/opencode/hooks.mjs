@@ -47,15 +47,6 @@ function createHooks() {
         value: output.args,
         tool: input.tool,
       });
-      if (response.unresolved?.length) {
-        // Running the tool would write literal mask tokens to disk or send
-        // them to a service, e.g. tokens from an expired or other session.
-        throw new Error(
-          "secret-redactor: these masked values are unknown to this session " +
-          `(expired, restarted, or from another session): ${response.unresolved.join(", ")}. ` +
-          "Re-read the source to get fresh values.",
-        );
-      }
       if (!response.changed) return;
       // OpenCode server hooks cannot prompt, so "ask" refuses like "deny".
       if (response.decision !== "allow") {

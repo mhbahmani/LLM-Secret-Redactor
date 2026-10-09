@@ -114,8 +114,7 @@ def unmask_recursive(obj: Any, session_id: str) -> Tuple[Any, bool]:
 
 
 def restore_tool_input(tool_input: Any, session_id: str, tool: str) -> Dict[str, Any]:
-    """Unmask tool input. The response lists tokens the session cannot resolve
-    and the restore policy decision for the tool."""
+    """Unmask tool input. The response includes the restore policy decision for the tool."""
     return broker_request("unmask", session_id, tool_input, tool=tool)
 
 

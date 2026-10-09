@@ -52,18 +52,8 @@ def main():
 
         tool_name = data.get("tool_name", "")
         response = restore_tool_input(tool_input, session_id, tool_name)
-        unresolved = response.get("unresolved", [])
 
-        if unresolved:
-            # Running the tool would write literal mask tokens to disk or send
-            # them to a service, e.g. tokens from an expired or other session.
-            print(json.dumps(decision(
-                "deny",
-                "secret-redactor: these masked values are unknown to this session "
-                f"(expired, restarted, or from another session): {', '.join(unresolved)}. "
-                "Re-read the source to get fresh values.",
-            )))
-        elif response.get("changed"):
+        if response.get("changed"):
             print(json.dumps(restore_output(tool_name, response)))
         else:
             print(json.dumps({}))

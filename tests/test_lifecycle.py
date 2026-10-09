@@ -99,7 +99,7 @@ def test_flow():
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
     print("✓ pre_tool_use: follows the per-tool restore policy")
 
-    # 5. PreToolUse refuses tokens that the session cannot resolve
+    # 5. PreToolUse leaves tokens the session cannot resolve unchanged
     stale = "__MASKED_TOKEN_" + "0" * 32 + "__"
     res = run_hook("pre_tool_use.py", {
         "session_id": SESSION,
@@ -107,8 +107,8 @@ def test_flow():
         "tool_name": "Write",
         "tool_input": {"file_path": "/tmp/x", "content": f"KEY={stale}"}
     })
-    assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
-    print("✓ pre_tool_use: blocked a tool call with an unknown mask token")
+    assert res == {}, res
+    print("✓ pre_tool_use: let a tool call with an unknown mask token run unchanged")
 
     # 6. Without a broker, hooks still keep secrets away from the model
     broken = {"SECRET_REDACTOR_RUNTIME_DIR": os.path.join(TEST_RUNTIME_DIR, "broker.sock", "missing")}
