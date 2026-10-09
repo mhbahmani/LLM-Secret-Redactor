@@ -32,6 +32,33 @@ class TestVaultCore(unittest.TestCase):
         shutdown_broker()
         shutil.rmtree(TEST_RUNTIME_DIR, ignore_errors=True)
 
+    def test_key_prefixes_inside_words_are_not_masked(self):
+        names = [
+            "src/task-management-service-handler.ts",
+            "/var/log/disk-usage-monitoring-report.log",
+            "https://example.com/blog/risk-assessment-framework-guide",
+            "docs/desk-booking-integration-notes.md",
+            "lib/high_gho_1234567890123456789012345678901234567/x",
+            "id=XAKIAIOSFODNN7EXAMPLE1",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                masked, _ = mask_text(name, self.session_id)
+                self.assertEqual(masked, name)
+
+    def test_key_prefixes_at_word_start_are_masked(self):
+        secrets = [
+            "sk-proj-1234567890abcdef1234567890",
+            "sk-ant-1234567890abcdef1234567890",
+            "ghp_123456789012345678901234567890123456",
+            "AKIAIOSFODNN7EXAMPLE",
+        ]
+        for secret in secrets:
+            for text in (secret, f"key={secret}", f"s3://bucket/{secret}/report.csv", f"'{secret}'"):
+                with self.subTest(text=text):
+                    masked, _ = mask_text(text, self.session_id)
+                    self.assertNotIn(secret, masked)
+
     def test_mask_and_unmask_openai_key(self):
         secret = "sk-proj-1234567890abcdef1234567890"
         text = f"API_KEY={secret}"

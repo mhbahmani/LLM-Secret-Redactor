@@ -1,22 +1,22 @@
 [
   {
     "name": "Anthropic key",
-    "pattern": "sk-ant-[a-zA-Z0-9_\\-]{20,}",
+    "pattern": "(?<![A-Za-z0-9_])sk-ant-[a-zA-Z0-9_\\-]{20,}",
     "kind": "TOKEN"
   },
   {
     "name": "OpenAI key",
-    "pattern": "sk-[a-zA-Z0-9_\\-]{20,}",
+    "pattern": "(?<![A-Za-z0-9_])sk-[a-zA-Z0-9_\\-]{20,}",
     "kind": "TOKEN"
   },
   {
     "name": "GitHub Token",
-    "pattern": "gh[pousr]_[a-zA-Z0-9]{36,}",
+    "pattern": "(?<![A-Za-z0-9_])gh[pousr]_[a-zA-Z0-9]{36,}",
     "kind": "TOKEN"
   },
   {
     "name": "AWS Access Key ID",
-    "pattern": "(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}",
+    "pattern": "(?<![A-Za-z0-9_])(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])",
     "kind": "AWS_KEY"
   },
   {
