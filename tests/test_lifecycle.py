@@ -154,6 +154,35 @@ def test_flow():
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny", res
     print("✓ hooks: fail closed when the broker is unavailable")
 
+    # 7. /redact off stops masking for this session only; /redact on resumes
+    redact_session = "test-redact-toggle"
+    secret_output = {"stdout": "GITHUB_TOKEN=ghp_123456789012345678901234567890123456"}
+
+    def redact(argument):
+        return run_hook("redact_command.py", {
+            "session_id": redact_session, "hook_event_name": "UserPromptExpansion",
+            "expansion_type": "slash_command", "command_name": "redact",
+            "command_args": argument, "prompt": f"/redact {argument}",
+        })
+
+    res = redact("off")
+    assert res["decision"] == "block" and "OFF" in res["reason"], res
+    res = run_hook("post_tool_use.py", {"session_id": redact_session, "tool_response": secret_output})
+    assert res == {}, f"Output was masked while masking was off: {res}"
+    res = run_hook("user_prompt_submit.py", {
+        "session_id": redact_session, "prompt": "use ghp_123456789012345678901234567890123456",
+    })
+    assert res == {}, f"Prompt was blocked while masking was off: {res}"
+    res = run_hook("post_tool_use.py", {"session_id": SESSION, "tool_response": secret_output})
+    assert "ghp_1234" not in json.dumps(res), "Other sessions must stay masked"
+    assert "OFF" in redact("status")["reason"]
+    assert "ON" in redact("on")["reason"]
+    res = run_hook("post_tool_use.py", {"session_id": redact_session, "tool_response": secret_output})
+    assert "ghp_1234" not in json.dumps(res), res
+    assert "Usage" in redact("maybe")["reason"]
+    assert run_hook("redact_command.py", {"session_id": redact_session, "command_name": "deploy"}) == {}
+    print("✓ redact_command: /redact switches masking for one session")
+
     print("\nALL LIFECYCLE TESTS PASSED.")
 
 if __name__ == "__main__":

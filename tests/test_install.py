@@ -109,6 +109,35 @@ class OpenCodeInstallerTests(unittest.TestCase):
             ("uninstall", "global", "claude", None, "v1.2.0"),
         )
 
+    def test_claude_install_adds_redact_command(self):
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with tempfile.TemporaryDirectory() as claude_dir:
+            install.do_install_claude(claude_dir, repo_dir)
+            with open(os.path.join(claude_dir, "settings.json"), "r", encoding="utf-8") as handle:
+                groups = json.load(handle)["hooks"]["UserPromptExpansion"]
+            self.assertEqual(groups[0]["matcher"], "redact")
+            self.assertTrue(groups[0]["hooks"][0]["command"].endswith("/redact_command.py"))
+            command = os.path.join(claude_dir, "commands", "redact.md")
+            with open(command, "r", encoding="utf-8") as handle:
+                self.assertIn("disable-model-invocation: true", handle.read())
+
+            install.do_uninstall_claude(claude_dir)
+            self.assertFalse(os.path.exists(command))
+            with open(os.path.join(claude_dir, "settings.json"), "r", encoding="utf-8") as handle:
+                self.assertNotIn("UserPromptExpansion", json.load(handle).get("hooks", {}))
+
+    def test_claude_install_keeps_a_users_own_redact_command(self):
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with tempfile.TemporaryDirectory() as claude_dir:
+            command = os.path.join(claude_dir, "commands", "redact.md")
+            os.makedirs(os.path.dirname(command))
+            with open(command, "w", encoding="utf-8") as handle:
+                handle.write("my own command")
+            install.do_install_claude(claude_dir, repo_dir)
+            install.do_uninstall_claude(claude_dir)
+            with open(command, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "my own command")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,8 +23,13 @@ CLAUDE_FILES = [
     ("user_prompt_submit.py", "user_prompt_submit.py"),
     ("post_tool_use.py", "post_tool_use.py"),
     ("message_display.py", "message_display.py"),
-    ("pre_tool_use.py", "pre_tool_use.py")
+    ("pre_tool_use.py", "pre_tool_use.py"),
+    ("redact_command.py", "redact_command.py"),
 ]
+
+# Installed into <claude dir>/commands, next to the user's own commands.
+CLAUDE_COMMAND = ("commands/redact.md", "redact.md")
+COMMAND_MARKER = "secret-redactor"
 
 OPENCODE_FILES = [
     ("broker.py", "broker.py"),
@@ -251,6 +256,8 @@ def do_uninstall_claude(chosen_dir):
         else:
             print("No redactor hooks found in Claude Code settings.json")
 
+    remove_claude_command(chosen_dir)
+
     if os.path.isdir(hooks_dir):
         shutil.rmtree(hooks_dir)
         print(f"Removed Claude Code hooks directory: {hooks_dir}")
@@ -258,6 +265,33 @@ def do_uninstall_claude(chosen_dir):
     parent_hooks = os.path.join(chosen_dir, "hooks")
     if os.path.isdir(parent_hooks) and not os.listdir(parent_hooks):
         os.rmdir(parent_hooks)
+
+def install_claude_command(chosen_dir, local_repo_dir):
+    """Install /redact, without overwriting a redact.md the user wrote."""
+    src_rel, dest_name = CLAUDE_COMMAND
+    target = os.path.join(chosen_dir, "commands", dest_name)
+    if os.path.isfile(target):
+        with open(target, "r", encoding="utf-8") as f:
+            if COMMAND_MARKER not in f.read():
+                print(f"Skipped {target}: it is not ours. /redact will not be available.")
+                return
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(get_script_source(src_rel, local_repo_dir))
+    print(f"Installed /redact command: {target}")
+
+def remove_claude_command(chosen_dir):
+    target = os.path.join(chosen_dir, "commands", CLAUDE_COMMAND[1])
+    if not os.path.isfile(target):
+        return
+    with open(target, "r", encoding="utf-8") as f:
+        if COMMAND_MARKER not in f.read():
+            return
+    os.remove(target)
+    print(f"Removed /redact command: {target}")
+    commands_dir = os.path.dirname(target)
+    if not os.listdir(commands_dir):
+        os.rmdir(commands_dir)
 
 def do_install_claude(chosen_dir, local_repo_dir):
     hooks_dir = os.path.join(chosen_dir, "hooks", APP_NAME)
@@ -281,17 +315,19 @@ def do_install_claude(chosen_dir, local_repo_dir):
             settings = {}
 
     hooks = settings.setdefault("hooks", {})
+    # event -> (command, matcher); a matcher of None registers for every case.
     hooks_def = {
-        "SessionStart": f"{hook_path_prefix}/session_start.py",
-        "SessionEnd": f"{hook_path_prefix}/session_end.py",
-        "UserPromptSubmit": f"{hook_path_prefix}/user_prompt_submit.py",
-        "PostToolUse": f"{hook_path_prefix}/post_tool_use.py",
-        "MessageDisplay": f"{hook_path_prefix}/message_display.py",
-        "PreToolUse": f"{hook_path_prefix}/pre_tool_use.py",
+        "SessionStart": (f"{hook_path_prefix}/session_start.py", None),
+        "SessionEnd": (f"{hook_path_prefix}/session_end.py", None),
+        "UserPromptSubmit": (f"{hook_path_prefix}/user_prompt_submit.py", None),
+        "UserPromptExpansion": (f"{hook_path_prefix}/redact_command.py", "redact"),
+        "PostToolUse": (f"{hook_path_prefix}/post_tool_use.py", None),
+        "MessageDisplay": (f"{hook_path_prefix}/message_display.py", None),
+        "PreToolUse": (f"{hook_path_prefix}/pre_tool_use.py", None),
     }
 
     modified = False
-    for event, cmd in hooks_def.items():
+    for event, (cmd, matcher) in hooks_def.items():
         event_list = hooks.setdefault(event, [])
         target_basename = os.path.basename(cmd)
         already_registered = False
@@ -312,10 +348,13 @@ def do_install_claude(chosen_dir, local_repo_dir):
                 break
 
         if not already_registered:
-            event_list.append({
-                "hooks": [{"type": "command", "command": cmd}]
-            })
+            group = {"hooks": [{"type": "command", "command": cmd}]}
+            if matcher:
+                group["matcher"] = matcher
+            event_list.append(group)
             modified = True
+
+    install_claude_command(chosen_dir, local_repo_dir)
 
     if modified or not os.path.exists(settings_file):
         if os.path.exists(settings_file):
