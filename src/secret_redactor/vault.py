@@ -22,6 +22,10 @@ get_runtime_dir = broker.runtime_dir
 get_socket_path = broker.socket_path
 
 
+class BrokerUnavailable(RuntimeError):
+    """The broker closed the connection without answering, e.g. while exiting."""
+
+
 def _send(request: Dict[str, Any]) -> Dict[str, Any]:
     encoded = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -37,7 +41,7 @@ def _send(request: Dict[str, Any]) -> Dict[str, Any]:
             if len(chunks) > 16 * 1024 * 1024:
                 raise RuntimeError("Secret broker response exceeded size limit")
     if not chunks:
-        raise RuntimeError("Secret broker returned an empty response")
+        raise BrokerUnavailable("Secret broker returned an empty response")
     response = json.loads(chunks)
     if not response.get("ok"):
         raise RuntimeError(response.get("error", "Secret broker request failed"))
@@ -79,7 +83,9 @@ def broker_request(
         request["value"] = value
     try:
         return _send(request)
-    except (FileNotFoundError, ConnectionRefusedError, socket.timeout, RuntimeError):
+    except (FileNotFoundError, ConnectionRefusedError, BrokerUnavailable):
+        # Only start a broker when none is listening. A timeout means the
+        # broker is alive but busy, and error replies are not retryable.
         _start_broker()
         return _send(request)
 
