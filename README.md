@@ -4,6 +4,10 @@ Memory-only secret redactor for **Claude Code** and **OpenCode**.
 
 Prevents sensitive credentials (API keys, passwords, database URIs, bearer tokens, JWTs) from reaching LLMs when read from files, logs, or command output. Mappings live only in a per-user memory broker and are restored only for local tool execution or an explicit local reveal.
 
+<p align="center">
+  <img src="docs/workflow.png" alt="Secrets in code, commands, or logs are replaced with mask tokens before reaching the LLM, while the mapping stays in a local session vault and is restored only for local output or tool execution" width="900">
+</p>
+
 ## Supported Clients
 
 - **Claude Code**: Uses native lifecycle hooks (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PostToolUse`, `PreToolUse`, `MessageDisplay`).
